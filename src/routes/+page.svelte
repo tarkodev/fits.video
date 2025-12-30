@@ -17,8 +17,10 @@
   let errorMessage = $state('');
   let isDragging = $state(false);
   let eventSource = $state<EventSource | null>(null);
+  let uploadAbort = $state<(() => void) | null>(null);
   let isPlaying = $state(true);
   let previewVideo = $state<HTMLVideoElement | null>(null);
+  let aspectRatio = $state(56.25); // Default 16:9 (9/16 * 100)
 
   // Size presets
   const sizePresets = [8, 10, 25, 50, 100];
@@ -26,7 +28,7 @@
   // Computed
   let selectedSize = $derived(isCustom ? (parseFloat(customSize) || 8) : targetSize);
   let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim()));
-  let fileName = $derived(file?.name || (url.trim() ? 'URL video' : ''));
+  let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
 
   function formatBytes(bytes: number): string {
@@ -73,6 +75,8 @@
     if (input.files && input.files.length > 0) {
       setFile(input.files[0]);
     }
+    // Reset input to allow re-selecting the same file
+    input.value = '';
   }
 
   function setFile(f: File) {
@@ -83,6 +87,21 @@
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(f);
     isPlaying = true;
+    aspectRatio = 56.25; // Reset to default while loading
+  }
+
+  function handleVideoLoaded(e: Event) {
+    const video = e.target as HTMLVideoElement;
+    if (video.videoWidth && video.videoHeight) {
+      aspectRatio = (video.videoHeight / video.videoWidth) * 100;
+    }
+  }
+
+  function handleImageLoaded(e: Event) {
+    const img = e.target as HTMLImageElement;
+    if (img.naturalWidth && img.naturalHeight) {
+      aspectRatio = (img.naturalHeight / img.naturalWidth) * 100;
+    }
   }
 
   function togglePreview(e: Event) {
@@ -99,6 +118,11 @@
   }
 
   function clearFile() {
+    // Abort ongoing upload if any
+    if (uploadAbort) {
+      uploadAbort();
+      uploadAbort = null;
+    }
     file = null;
     url = '';
     customSize = '';
@@ -139,9 +163,12 @@
         console.log('Uploading file:', file.name);
         // Apply 5% safety margin for MB/MiB differences
         const safeSize = selectedSize * 0.95;
-        const uploadResp = await uploadFile(file, safeSize, 128, (pct) => {
+        const { promise, abort } = uploadFile(file, safeSize, 128, (pct) => {
           uploadProgress = pct;
         });
+        uploadAbort = abort;
+        const uploadResp = await promise;
+        uploadAbort = null;
         console.log('Upload response:', uploadResp);
         // API returns job_id from upload
         jobId = (uploadResp as any).job_id || uploadResp.task_id;
@@ -272,6 +299,8 @@
       };
 
     } catch (err: any) {
+      // Don't show error if user cancelled
+      if (err.message === 'Upload cancelled') return;
       status = 'error';
       errorMessage = err.message || 'Something went wrong';
     }
@@ -314,15 +343,15 @@
     for="file-input"
     class="drop-zone card"
     class:dragging={isDragging}
-    class:has-file={!!file || !!url.trim()}
+    class:has-file={!!file}
     class:processing={status === 'uploading' || status === 'compressing'}
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
   >
-    {#if file || url.trim()}
+    {#if file}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="file-preview-card fade-in" onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); } }} role="button" tabindex="0">
+      <div class="file-preview-card fade-in" style="aspect-ratio: 100 / {Math.min(aspectRatio, 75)};" onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); } }} role="button" tabindex="0">
         {#if previewUrl}
           {#if file?.type.startsWith('video/')}
             <video 
@@ -333,12 +362,14 @@
               loop 
               autoplay 
               class="bg-video"
+              onloadedmetadata={handleVideoLoaded}
             ></video>
           {:else if file?.type.startsWith('image/')}
             <img 
               src={previewUrl} 
               alt="Preview"
               class="bg-video"
+              onload={handleImageLoaded}
             />
           {/if}
           <div class="video-overlay"></div>
@@ -364,9 +395,8 @@
           </div>
           <button 
             class="btn-clear" 
-            onclick={(e) => { e.preventDefault(); e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
-            disabled={status === 'uploading' || status === 'compressing'}
-            aria-label="Clear file"
+            onclick={(e) => { e.preventDefault(); e.stopPropagation(); clearFile(); }}
+            aria-label="Cancel"
           >×</button>
         </div>
       </div>
@@ -454,16 +484,17 @@
         </div>
       {:else if status === 'error'}
         <div class="status-error">
-          <span class="status-icon">❌</span>
+          <span class="status-icon">💔</span>
           <span>{errorMessage || 'An error occurred'}</span>
+          <button class="btn-dismiss" onclick={() => { status = 'idle'; errorMessage = ''; }} aria-label="Dismiss">×</button>
         </div>
       {/if}
     </div>
   {/if}
 
   <!-- Action Button -->
-  <div class="action-section">
-    {#if status === 'idle'}
+  {#if status === 'idle'}
+    <div class="action-section">
       <button 
         class="btn-primary compress-btn" 
         onclick={compress}
@@ -471,16 +502,8 @@
       >
         COMPRESS
       </button>
-    {:else if status === 'uploading' || status === 'compressing'}
-      <button class="btn-secondary compress-btn" onclick={handleCancel}>
-        CANCEL
-      </button>
-    {:else}
-      <button class="btn-primary compress-btn" onclick={clearFile}>
-        COMPRESS ANOTHER
-      </button>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   <!-- Footer -->
   <footer class="footer text-muted text-xs">
@@ -879,12 +902,33 @@
   }
 
   .status-error {
+    position: relative;
     background: rgba(239, 68, 68, 0.1);
     color: var(--error);
+    padding-right: 36px;
   }
 
   .status-icon {
     font-size: 1.25rem;
+  }
+
+  .btn-dismiss {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.25rem;
+    cursor: pointer;
+    opacity: 0.7;
+    padding: 0 4px;
+    line-height: 1;
+  }
+
+  .btn-dismiss:hover {
+    opacity: 1;
   }
 
   /* Action Section */

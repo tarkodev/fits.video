@@ -18,20 +18,21 @@ export interface ProgressEvent {
     output_size?: number;
 }
 
-// Upload file to the API
-export async function uploadFile(
+// Upload file to the API - returns promise and abort function
+export function uploadFile(
     file: File,
     targetSizeMB: number,
     audioKbps = 128,
     onProgress?: (percent: number) => void
-): Promise<UploadResponse> {
-    return new Promise((resolve, reject) => {
+): { promise: Promise<UploadResponse>; abort: () => void } {
+    const xhr = new XMLHttpRequest();
+
+    const promise = new Promise<UploadResponse>((resolve, reject) => {
         const fd = new FormData();
         fd.append('file', file);
         fd.append('target_size_mb', String(targetSizeMB));
         fd.append('audio_bitrate_kbps', String(audioKbps));
 
-        const xhr = new XMLHttpRequest();
         xhr.open('POST', `${API}/api/upload`);
 
         xhr.upload.onprogress = (e) => {
@@ -54,8 +55,11 @@ export async function uploadFile(
         };
 
         xhr.onerror = () => reject(new Error('Network error'));
+        xhr.onabort = () => reject(new Error('Upload cancelled'));
         xhr.send(fd);
     });
+
+    return { promise, abort: () => xhr.abort() };
 }
 
 // Start compression job
