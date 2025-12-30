@@ -364,7 +364,7 @@
           </div>
           <button 
             class="btn-clear" 
-            onclick={(e) => { e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
+            onclick={(e) => { e.preventDefault(); e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
             disabled={status === 'uploading' || status === 'compressing'}
             aria-label="Clear file"
           >×</button>
@@ -374,9 +374,9 @@
       <div class="drop-content">
         <div class="drop-icon">📁</div>
         <p class="drop-text">
-          <strong>Drag & drop</strong> your video here
+          <strong>Drag & Drop</strong> your video here
         </p>
-        <p class="drop-subtext text-muted text-sm">or click to browse</p>
+        <p class="drop-subtext text-muted text-sm">or click to choose from your device</p>
         
         <div class="divider">
           <span>OR</span>
@@ -386,7 +386,7 @@
           <span class="url-icon">🔗</span>
           <input 
             type="url" 
-            placeholder="Paste video URL" 
+            placeholder="Paste a direct video URL" 
             bind:value={url}
             onclick={(e) => e.stopPropagation()}
           />
