@@ -341,10 +341,11 @@
             type="text" 
             inputmode="numeric"
             pattern="[0-9]*"
+            maxlength="3"
             placeholder="..."
             bind:value={customSize}
             onfocus={enableCustom}
-            oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, ''); }}
+            oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, '').slice(0, 3); }}
             disabled={status !== 'idle'}
           />
           <span class="size-unit">MB</span>
