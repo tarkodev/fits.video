@@ -258,14 +258,25 @@
     <p class="tagline">MP4, GIF, whatever: now it fits.</p>
   </header>
 
+  <!-- Hidden file input always present -->
+  <input 
+    id="file-input"
+    type="file" 
+    accept="video/*,image/gif" 
+    class="file-input-hidden" 
+    onchange={handleFileSelect}
+  />
+
   <!-- Drop Zone -->
   <div 
     class="drop-zone card"
     class:dragging={isDragging}
     class:has-file={!!file || !!url.trim()}
+    class:processing={status === 'uploading' || status === 'compressing'}
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
+    onclick={() => { if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }}
     role="button"
     tabindex="0"
   >
@@ -278,7 +289,12 @@
             <span class="file-size text-muted">{fileSize}</span>
           {/if}
         </div>
-        <button class="btn-clear" onclick={clearFile} aria-label="Clear file">×</button>
+        <button 
+          class="btn-clear" 
+          onclick={(e) => { e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
+          disabled={status === 'uploading' || status === 'compressing'}
+          aria-label="Clear file"
+        >×</button>
       </div>
     {:else}
       <div class="drop-content">
@@ -292,7 +308,7 @@
           <span>OR</span>
         </div>
         
-        <div class="url-input-wrapper">
+        <div class="url-input-wrapper" onclick={(e) => e.stopPropagation()}>
           <span class="url-icon">🔗</span>
           <input 
             type="url" 
@@ -302,13 +318,6 @@
           />
         </div>
       </div>
-      
-      <input 
-        type="file" 
-        accept="video/*,image/gif" 
-        class="file-input" 
-        onchange={handleFileSelect}
-      />
     {/if}
   </div>
 
@@ -329,12 +338,13 @@
       
       <div class="custom-size" class:active={isCustom}>
         <input 
-          type="number" 
+          type="text" 
+          inputmode="numeric"
+          pattern="[0-9]*"
           placeholder="Custom"
           bind:value={customSize}
           onfocus={enableCustom}
-          min="1"
-          max="4096"
+          oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, ''); }}
           disabled={status !== 'idle'}
         />
         <span class="unit">MB</span>
@@ -450,14 +460,26 @@
 
   .drop-zone.has-file {
     border-style: solid;
-    cursor: default;
+    cursor: pointer;
   }
 
-  .file-input {
+  .drop-zone.processing {
+    cursor: wait;
+  }
+
+  .file-input,
+  .file-input-hidden {
     position: absolute;
     inset: 0;
     opacity: 0;
     cursor: pointer;
+    pointer-events: none;
+  }
+
+  .file-input-hidden {
+    position: fixed;
+    top: -9999px;
+    left: -9999px;
   }
 
   .drop-content {
@@ -553,11 +575,23 @@
     font-size: 1.5rem;
     background: var(--bg-hover);
     color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
   }
 
-  .btn-clear:hover {
+  .btn-clear:hover:not(:disabled) {
     background: var(--error);
     color: var(--text-primary);
+  }
+
+  .btn-clear:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .drop-zone.processing {
+    pointer-events: none;
+    opacity: 0.7;
   }
 
   /* Size Section */
