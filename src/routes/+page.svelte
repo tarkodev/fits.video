@@ -4,6 +4,7 @@
   // State
   let file = $state<File | null>(null);
   let url = $state('');
+  let previewUrl = $state<string | null>(null);
   let targetSize = $state(10);
   let customSize = $state('');
   let isCustom = $state(false);
@@ -16,6 +17,8 @@
   let errorMessage = $state('');
   let isDragging = $state(false);
   let eventSource = $state<EventSource | null>(null);
+  let isPlaying = $state(true);
+  let previewVideo = $state<HTMLVideoElement | null>(null);
 
   // Size presets
   const sizePresets = [8, 10, 25, 50, 100];
@@ -47,6 +50,7 @@
   // Drag & Drop handlers
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
+    if (status !== 'idle' && status !== 'error' && status !== 'done') return; // Prevent drag during processing
     isDragging = true;
   }
 
@@ -60,26 +64,62 @@
     const files = e.dataTransfer?.files;
     if (files?.length) {
       file = files[0];
-      url = '';
+      setFile(files[0]);
     }
   }
 
   function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
-    if (input.files?.length) {
-      file = input.files[0];
-      url = '';
+    if (input.files && input.files.length > 0) {
+      setFile(input.files[0]);
+    }
+  }
+
+  function setFile(f: File) {
+    file = f;
+    url = ''; // Clear URL if file is selected
+    
+    // Create preview URL
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(f);
+    isPlaying = true;
+  }
+
+  function togglePreview(e: Event) {
+    e.stopPropagation();
+    if (previewVideo) {
+      if (previewVideo.paused) {
+        previewVideo.play();
+        isPlaying = true;
+      } else {
+        previewVideo.pause();
+        isPlaying = false;
+      }
     }
   }
 
   function clearFile() {
     file = null;
     url = '';
+    customSize = '';
+    isCustom = false;
+    targetSize = 10;
     status = 'idle';
-    taskId = null;
     uploadProgress = 0;
     compressProgress = 0;
     errorMessage = '';
+    if (taskId) {
+      cancelJob(taskId).catch(() => {});
+      taskId = null;
+    }
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
   }
 
   async function compress() {
@@ -281,20 +321,53 @@
     tabindex="0"
   >
     {#if file || url.trim()}
-      <div class="file-info fade-in">
-        <div class="file-icon">📹</div>
-        <div class="file-details">
-          <span class="file-name">{fileName}</span>
-          {#if fileSize}
-            <span class="file-size text-muted">{fileSize}</span>
+      <div class="file-preview-card fade-in" onclick={(e) => { e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }}>
+        {#if previewUrl}
+          {#if file?.type.startsWith('video/')}
+            <video 
+              bind:this={previewVideo}
+              src={previewUrl} 
+              muted 
+              playsinline 
+              loop 
+              autoplay 
+              class="bg-video"
+            ></video>
+          {:else if file?.type.startsWith('image/')}
+            <img 
+              src={previewUrl} 
+              alt="Preview"
+              class="bg-video"
+            />
           {/if}
+          <div class="video-overlay"></div>
+        {/if}
+        
+        <div class="preview-content">
+          <div 
+            class="file-icon" 
+            class:clickable={!!previewUrl}
+            class:is-play-icon={previewUrl && file?.type.startsWith('video/') && !isPlaying}
+            class:is-pause-icon={previewUrl && file?.type.startsWith('video/') && isPlaying}
+            onclick={previewUrl ? togglePreview : undefined}
+            role={previewUrl ? "button" : undefined}
+            tabindex={previewUrl ? 0 : undefined}
+          >
+            {previewUrl && file?.type.startsWith('video/') ? (isPlaying ? '⏸' : '▶') : '📹'}
+          </div>
+          <div class="file-details">
+            <span class="file-name">{fileName}</span>
+            {#if fileSize}
+              <span class="file-size">{fileSize}</span>
+            {/if}
+          </div>
+          <button 
+            class="btn-clear" 
+            onclick={(e) => { e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
+            disabled={status === 'uploading' || status === 'compressing'}
+            aria-label="Clear file"
+          >×</button>
         </div>
-        <button 
-          class="btn-clear" 
-          onclick={(e) => { e.stopPropagation(); if (status !== 'uploading' && status !== 'compressing') clearFile(); }}
-          disabled={status === 'uploading' || status === 'compressing'}
-          aria-label="Clear file"
-        >×</button>
       </div>
     {:else}
       <div class="drop-content">
@@ -467,6 +540,9 @@
 
   .drop-zone.processing {
     cursor: wait;
+    /* pointer-events: none; Removed to allow play button interaction */
+    /* opacity: 0.7; Removed to keep video visible */
+    border-color: var(--accent-glow); /* Add some visual cue it's processing */
   }
 
   .file-input,
@@ -539,51 +615,125 @@
     padding-left: 40px;
   }
 
-  /* File Info */
-  .file-info {
+  /* File Info / Preview Card */
+  .file-preview-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    border-radius: 16px;
+    background: var(--bg-card);
+  }
+
+  .bg-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.6;
+  }
+
+  .video-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.4));
+  }
+
+  .preview-content {
+    position: relative;
+    z-index: 10;
     display: flex;
     align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 8px;
+    gap: 16px;
+    padding: 20px;
+    height: 100%;
+    justify-content: space-between;
   }
 
   .file-icon {
-    font-size: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+    font-size: 1.5rem;
+    color: white;
+    color: white;
+    line-height: 1;
   }
+
+  .file-icon.is-play-icon {
+    padding-left: 3px; /* Center play icon visually */
+  }
+
+  .file-icon.is-pause-icon {
+    padding-bottom: 3px; /* Move pause icon slightly up */
+  }
+
+  .file-icon.clickable {
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .file-icon.clickable:hover {
+    background: rgba(255,255,255,0.2);
+    transform: scale(1.05);
+  }
+
+
 
   .file-details {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    gap: 4px;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
   }
 
   .file-name {
-    font-weight: 500;
+    font-weight: 600;
+    font-size: 1.1rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: white;
   }
 
   .file-size {
     font-size: 0.875rem;
+    color: rgba(255,255,255,0.8);
   }
 
   .btn-clear {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     padding: 0;
     font-size: 1.5rem;
-    background: var(--bg-hover);
-    color: var(--text-secondary);
+    line-height: 1;
+    background: rgba(255,255,255,0.15);
+    color: white;
+    border-radius: 50%;
+    backdrop-filter: blur(4px);
     cursor: pointer;
     transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 3px; /* Visual correction for X */
   }
 
   .btn-clear:hover:not(:disabled) {
     background: var(--error);
-    color: var(--text-primary);
+    border-color: var(--error);
+    transform: scale(1.05);
   }
 
   .btn-clear:disabled {
@@ -591,9 +741,10 @@
     cursor: not-allowed;
   }
 
-  .drop-zone.processing {
-    pointer-events: none;
-    opacity: 0.7;
+  .drop-zone.processing .bg-video {
+    /* opacity: 0.3; Removed */
+    /* filter: grayscale(1); Removed */
+    opacity: 0.5; /* Just dim it slightly instead of grayscale */
   }
 
   /* Size Selector - Segmented Control Style */
