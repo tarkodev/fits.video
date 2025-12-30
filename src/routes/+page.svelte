@@ -4,7 +4,7 @@
   // State
   let file = $state<File | null>(null);
   let url = $state('');
-  let targetSize = $state(8);
+  let targetSize = $state(10);
   let customSize = $state('');
   let isCustom = $state(false);
   
@@ -22,7 +22,7 @@
 
   // Computed
   let selectedSize = $derived(isCustom ? (parseFloat(customSize) || 8) : targetSize);
-  let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle');
+  let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim()));
   let fileName = $derived(file?.name || (url.trim() ? 'URL video' : ''));
   let fileSize = $derived(file ? formatBytes(file.size) : '');
 
