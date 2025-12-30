@@ -323,31 +323,32 @@
 
   <!-- Size Selector -->
   <div class="size-section">
-    <p class="section-label text-muted text-sm">Select target size:</p>
-    <div class="size-buttons">
-      {#each sizePresets as size}
-        <button 
-          class="btn-secondary size-btn"
-          class:active={!isCustom && targetSize === size}
-          onclick={() => selectPreset(size)}
-          disabled={status !== 'idle'}
-        >
-          {size}<span class="unit">MB</span>
-        </button>
-      {/each}
-      
-      <div class="custom-size" class:active={isCustom}>
-        <input 
-          type="text" 
-          inputmode="numeric"
-          pattern="[0-9]*"
-          placeholder="Custom"
-          bind:value={customSize}
-          onfocus={enableCustom}
-          oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, ''); }}
-          disabled={status !== 'idle'}
-        />
-        <span class="unit">MB</span>
+    <div class="size-selector">
+      <div class="size-track">
+        {#each sizePresets as size, i}
+          <button 
+            class="size-option"
+            class:active={!isCustom && targetSize === size}
+            onclick={() => selectPreset(size)}
+            disabled={status !== 'idle'}
+          >
+            <span class="size-value">{size}</span>
+            <span class="size-unit">MB</span>
+          </button>
+        {/each}
+        <div class="size-option custom" class:active={isCustom}>
+          <input 
+            type="text" 
+            inputmode="numeric"
+            pattern="[0-9]*"
+            placeholder="..."
+            bind:value={customSize}
+            onfocus={enableCustom}
+            oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, ''); }}
+            disabled={status !== 'idle'}
+          />
+          <span class="size-unit">MB</span>
+        </div>
       </div>
     </div>
   </div>
@@ -594,70 +595,102 @@
     opacity: 0.7;
   }
 
-  /* Size Section */
+  /* Size Selector - Segmented Control Style */
   .size-section {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .section-label {
-    text-align: center;
+  .size-selector {
+    width: 100%;
   }
 
-  .size-buttons {
+  .size-track {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-  }
-
-  .size-btn {
-    min-width: 60px;
-    padding: 10px 14px;
-    font-size: 1rem;
-    font-weight: 600;
-  }
-
-  .size-btn .unit {
-    font-size: 0.75rem;
-    font-weight: 400;
-    margin-left: 2px;
-    opacity: 0.7;
-  }
-
-  .custom-size {
-    display: flex;
-    align-items: center;
     background: var(--bg-card);
     border: 1px solid var(--glass-border);
-    border-radius: var(--border-radius);
-    padding: 0 12px;
-    gap: 4px;
+    border-radius: 12px;
+    padding: 4px;
+    gap: 2px;
+  }
+
+  .size-option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 12px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: pointer;
     transition: all var(--transition-fast);
   }
 
-  .custom-size.active {
-    border-color: var(--accent);
-    box-shadow: 0 0 12px var(--accent-glow);
+  .size-option:hover:not(:disabled):not(.active) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
-  .custom-size input {
-    width: 70px;
+  .size-option.active {
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+    color: white;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+  }
+
+  .size-option:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .size-value {
+    font-weight: inherit;
+  }
+
+  .size-unit {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    font-weight: 400;
+  }
+
+  .size-option.custom {
+    min-width: 70px;
+    flex: 0.8;
+    padding: 8px;
+    gap: 4px;
+  }
+
+  .size-option.custom input {
+    width: 40px;
     background: transparent;
     border: none;
-    padding: 10px 4px;
-    text-align: right;
-    font-weight: 600;
+    color: inherit;
+    font-size: 0.95rem;
+    font-weight: inherit;
+    text-align: center;
+    padding: 0;
   }
 
-  .custom-size input:focus {
-    box-shadow: none;
-  }
-
-  .custom-size .unit {
-    font-size: 0.75rem;
+  .size-option.custom input::placeholder {
     color: var(--text-muted);
+  }
+
+  .size-option.custom input:focus {
+    outline: none;
+  }
+
+  .size-option.custom.active input {
+    color: white;
+  }
+
+  .size-option.custom.active input::placeholder {
+    color: rgba(255,255,255,0.6);
   }
 
   /* Progress Section */
