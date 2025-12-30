@@ -28,7 +28,7 @@ A modern, free video compression web app. Compress your videos to a specific fil
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/fits.video.git
+git clone https://github.com/tarkodev/fits.video.git
 cd fits.video
 
 # Install dependencies
