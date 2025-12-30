@@ -137,7 +137,9 @@
       let serverFilename: string = '';
       if (file) {
         console.log('Uploading file:', file.name);
-        const uploadResp = await uploadFile(file, selectedSize, 128, (pct) => {
+        // Apply 5% safety margin for MB/MiB differences
+        const safeSize = selectedSize * 0.95;
+        const uploadResp = await uploadFile(file, safeSize, 128, (pct) => {
           uploadProgress = pct;
         });
         console.log('Upload response:', uploadResp);
@@ -307,8 +309,9 @@
     onchange={handleFileSelect}
   />
 
-  <!-- Drop Zone -->
-  <div 
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <label 
+    for="file-input"
     class="drop-zone card"
     class:dragging={isDragging}
     class:has-file={!!file || !!url.trim()}
@@ -316,12 +319,10 @@
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
-    onclick={() => { if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }}
-    role="button"
-    tabindex="0"
   >
     {#if file || url.trim()}
-      <div class="file-preview-card fade-in" onclick={(e) => { e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }}>
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="file-preview-card fade-in" onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); } }} role="button" tabindex="0">
         {#if previewUrl}
           {#if file?.type.startsWith('video/')}
             <video 
@@ -344,17 +345,17 @@
         {/if}
         
         <div class="preview-content">
-          <div 
+          <button 
+            type="button"
             class="file-icon" 
             class:clickable={!!previewUrl}
             class:is-play-icon={previewUrl && file?.type.startsWith('video/') && !isPlaying}
             class:is-pause-icon={previewUrl && file?.type.startsWith('video/') && isPlaying}
             onclick={previewUrl ? togglePreview : undefined}
-            role={previewUrl ? "button" : undefined}
-            tabindex={previewUrl ? 0 : undefined}
+            disabled={!previewUrl}
           >
             {previewUrl && file?.type.startsWith('video/') ? (isPlaying ? '⏸' : '▶') : '📹'}
-          </div>
+          </button>
           <div class="file-details">
             <span class="file-name">{fileName}</span>
             {#if fileSize}
@@ -381,7 +382,7 @@
           <span>OR</span>
         </div>
         
-        <div class="url-input-wrapper" onclick={(e) => e.stopPropagation()}>
+        <div class="url-input-wrapper" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="group">
           <span class="url-icon">🔗</span>
           <input 
             type="url" 
@@ -392,7 +393,7 @@
         </div>
       </div>
     {/if}
-  </div>
+  </label>
 
   <!-- Size Selector -->
   <div class="size-section">
@@ -545,7 +546,6 @@
     border-color: var(--accent-glow); /* Add some visual cue it's processing */
   }
 
-  .file-input,
   .file-input-hidden {
     position: absolute;
     inset: 0;
@@ -660,12 +660,16 @@
     width: 48px;
     height: 48px;
     background: rgba(255,255,255,0.1);
+    border: none;
     border-radius: 12px;
     backdrop-filter: blur(4px);
     font-size: 1.5rem;
     color: white;
-    color: white;
     line-height: 1;
+  }
+
+  .file-icon:disabled {
+    cursor: default;
   }
 
   .file-icon.is-play-icon {
@@ -923,13 +927,9 @@
       min-height: 180px;
     }
 
-    .size-btn {
+    .size-option {
       min-width: 50px;
       padding: 8px 12px;
-    }
-
-    .custom-size input {
-      width: 60px;
     }
   }
 </style>
