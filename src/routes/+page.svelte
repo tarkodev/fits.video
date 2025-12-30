@@ -18,7 +18,7 @@
   let eventSource = $state<EventSource | null>(null);
 
   // Size presets
-  const sizePresets = [8, 10, 50, 100, 500];
+  const sizePresets = [8, 10, 25, 50, 100];
 
   // Computed
   let selectedSize = $derived(isCustom ? (parseFloat(customSize) || 8) : targetSize);
