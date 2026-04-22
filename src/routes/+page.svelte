@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { uploadFile, startCompress, openProgressStream, getDownloadUrl, cancelJob } from '$lib/api';
+  import {
+    cancelJob,
+    downloadCompletedFile,
+    getDefaultApiAuth,
+    getJobStatus,
+    openProgressStream,
+    startCompress,
+    uploadFile,
+    type ApiAuth
+  } from '$lib/api';
 
   // State
   let file = $state<File | null>(null);
@@ -17,10 +26,15 @@
   let errorMessage = $state('');
   let isDragging = $state(false);
   let eventSource = $state<EventSource | null>(null);
+  let statusPollTimer = $state<number | null>(null);
   let uploadAbort = $state<(() => void) | null>(null);
   let isPlaying = $state(true);
   let previewVideo = $state<HTMLVideoElement | null>(null);
   let aspectRatio = $state(56.25); // Default 16:9 (9/16 * 100)
+  let activeRunToken = $state(0);
+  let finalizingRunToken = $state<number | null>(null);
+  let statusPollFailures = $state(0);
+  let progressLabel = $state('Compressing...');
 
   // Size presets
   const sizePresets = [8, 10, 25, 50, 100];
@@ -30,6 +44,132 @@
   let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim()));
   let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
+
+  function getApiAuth(): ApiAuth {
+    return getDefaultApiAuth();
+  }
+
+  function getErrorMessage(err: unknown): string {
+    if (err instanceof Error && err.message) return err.message;
+    return 'Something went wrong';
+  }
+
+  function buildDownloadFilename(sourceName: string): string {
+    const fallback = sourceName.trim() || 'video';
+    const stem = fallback.replace(/\.[^/.]+$/, '') || fallback;
+    return `${stem}_compressed.mp4`;
+  }
+
+  function closeProgressWatchers() {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+
+    if (statusPollTimer !== null) {
+      window.clearInterval(statusPollTimer);
+      statusPollTimer = null;
+    }
+  }
+
+  function failCompression(message: string, runToken: number) {
+    if (runToken !== activeRunToken) return;
+    closeProgressWatchers();
+    finalizingRunToken = null;
+    status = 'error';
+    errorMessage = message;
+  }
+
+  async function finalizeDownload(
+    completedTaskId: string,
+    suggestedFilename: string,
+    auth: ApiAuth | null,
+    runToken: number
+  ) {
+    if (runToken !== activeRunToken) return;
+    if (finalizingRunToken === runToken || status === 'done') return;
+
+    finalizingRunToken = runToken;
+    closeProgressWatchers();
+    compressProgress = 100;
+    progressLabel = 'Preparing download...';
+
+    try {
+      await downloadCompletedFile(completedTaskId, suggestedFilename, auth, 5);
+      if (runToken !== activeRunToken) return;
+      status = 'done';
+    } catch (err) {
+      if (runToken !== activeRunToken) return;
+      status = 'error';
+      errorMessage = getErrorMessage(err);
+    } finally {
+      if (finalizingRunToken === runToken) {
+        finalizingRunToken = null;
+      }
+    }
+  }
+
+  async function syncJobStatus(
+    activeTaskId: string,
+    serverFilename: string,
+    auth: ApiAuth | null,
+    runToken: number
+  ) {
+    if (runToken !== activeRunToken || status !== 'compressing') return;
+
+    try {
+      const jobStatus = await getJobStatus(activeTaskId, auth);
+      if (runToken !== activeRunToken || status !== 'compressing') return;
+
+      statusPollFailures = 0;
+
+      if (typeof jobStatus.progress === 'number') {
+        compressProgress = Math.max(compressProgress, Math.round(jobStatus.progress));
+      }
+
+      const state = String(jobStatus.state || '').toUpperCase();
+      const detail = String(jobStatus.detail || '').toLowerCase();
+
+      if (state === 'SUCCESS' || detail === 'done') {
+        const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
+        await finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+        return;
+      }
+
+      if (state === 'FAILURE') {
+        failCompression(jobStatus.detail || 'Compression failed', runToken);
+        return;
+      }
+
+      if (state === 'REVOKED') {
+        failCompression('Compression cancelled', runToken);
+      }
+    } catch {
+      if (runToken !== activeRunToken || status !== 'compressing') return;
+      statusPollFailures += 1;
+
+      if (!eventSource && statusPollFailures >= 3) {
+        failCompression('Connection lost', runToken);
+      }
+    }
+  }
+
+  function startJobStatusPolling(
+    activeTaskId: string,
+    serverFilename: string,
+    auth: ApiAuth | null,
+    runToken: number
+  ) {
+    if (statusPollTimer !== null) {
+      window.clearInterval(statusPollTimer);
+    }
+
+    statusPollFailures = 0;
+    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+    statusPollTimer = window.setInterval(() => {
+      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+    }, 1500);
+  }
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -118,6 +258,10 @@
   }
 
   function clearFile() {
+    activeRunToken += 1;
+    finalizingRunToken = null;
+    statusPollFailures = 0;
+    progressLabel = 'Compressing...';
     // Abort ongoing upload if any
     if (uploadAbort) {
       uploadAbort();
@@ -133,13 +277,10 @@
     compressProgress = 0;
     errorMessage = '';
     if (taskId) {
-      cancelJob(taskId).catch(() => {});
+      cancelJob(taskId, getApiAuth()).catch(() => {});
       taskId = null;
     }
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
+    closeProgressWatchers();
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = null;
@@ -148,7 +289,13 @@
 
   async function compress() {
     if (!canCompress) return;
-    console.log('=== COMPRESS START ===');
+
+    const runToken = activeRunToken + 1;
+    activeRunToken = runToken;
+    finalizingRunToken = null;
+    statusPollFailures = 0;
+    progressLabel = 'Compressing...';
+    const auth = getApiAuth();
 
     try {
       status = 'uploading';
@@ -160,20 +307,25 @@
       let jobId: string | undefined;
       let serverFilename: string = '';
       if (file) {
-        console.log('Uploading file:', file.name);
         // Apply 5% safety margin for MB/MiB differences
         const safeSize = selectedSize * 0.95;
-        const { promise, abort } = uploadFile(file, safeSize, 128, (pct) => {
-          uploadProgress = pct;
-        });
+        const { promise, abort } = uploadFile(
+          file,
+          safeSize,
+          128,
+          (pct) => {
+            if (runToken !== activeRunToken) return;
+            uploadProgress = pct;
+          },
+          auth
+        );
         uploadAbort = abort;
         const uploadResp = await promise;
+        if (runToken !== activeRunToken) return;
         uploadAbort = null;
-        console.log('Upload response:', uploadResp);
         // API returns job_id from upload
-        jobId = (uploadResp as any).job_id || uploadResp.task_id;
-        serverFilename = (uploadResp as any).filename || file.name;
-        console.log('Got job_id:', jobId, 'serverFilename:', serverFilename);
+        jobId = uploadResp.job_id;
+        serverFilename = uploadResp.filename || file.name;
       } else if (url.trim()) {
         errorMessage = 'URL upload not yet supported';
         status = 'error';
@@ -181,7 +333,6 @@
       }
 
       if (!jobId) {
-        console.error('No job_id received from upload!');
         status = 'error';
         errorMessage = 'Upload failed - no job ID';
         return;
@@ -189,7 +340,6 @@
 
       // Start compression - use the filename returned by the server, not the original
       status = 'compressing';
-      console.log('Starting compression with job_id:', jobId, 'filename:', serverFilename);
       
       const compressResp = await startCompress({
         job_id: jobId,
@@ -197,34 +347,30 @@
         target_size_mb: selectedSize,
         audio_bitrate_kbps: 128,
         video_codec: 'libx264'  // Use CPU fallback codec for maximum compatibility
-      });
-      console.log('Compress response:', compressResp);
+      }, auth);
+      if (runToken !== activeRunToken) return;
       
       // Compress returns the actual task_id for SSE
       taskId = compressResp.task_id;
-      console.log('Got task_id for SSE:', taskId);
 
       if (!taskId) {
-        console.error('No task_id received from compress!');
         status = 'error';
         errorMessage = 'Compression failed to start';
         return;
       }
 
       // Listen for progress via SSE
-      console.log('Opening SSE stream for task:', taskId);
-      const es = openProgressStream(taskId);
+      const activeTaskId = taskId;
+      startJobStatusPolling(activeTaskId, serverFilename, auth, runToken);
+      const es = openProgressStream(activeTaskId);
       eventSource = es;
 
-      es.onopen = () => {
-        console.log('SSE connection opened');
-      };
-
       es.onmessage = (event) => {
-        console.log('SSE raw data:', event.data);
+        if (runToken !== activeRunToken) return;
+
         try {
           const data = JSON.parse(event.data);
-          console.log('SSE parsed:', data);
+          statusPollFailures = 0;
           
           // Normalize type to lowercase for comparison
           const eventType = (data.type || '').toLowerCase();
@@ -236,7 +382,6 @@
           
           // Handle progress events - API sends {type: 'progress', progress: 0-100}
           if (eventType === 'progress' && typeof data.progress === 'number') {
-            console.log('Progress update:', data.progress);
             compressProgress = Math.round(data.progress);
           }
           
@@ -255,65 +400,49 @@
             (eventType === 'progress' && data.progress >= 100);
           
           if (isCompleted) {
-            console.log('Compression completed!');
-            status = 'done';
             compressProgress = 100;
-            es.close();
-            eventSource = null;
             
-            // Auto-download with small delay to ensure file is ready
-            if (taskId) {
-              setTimeout(() => {
-                const downloadUrl = getDownloadUrl(taskId!);
-                console.log('Downloading from:', downloadUrl);
-                const a = document.createElement('a');
-                a.href = downloadUrl;
-                a.download = file?.name?.replace(/\.[^/.]+$/, '') + '_compressed.mp4';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-              }, 500);
+            if (activeTaskId) {
+              const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
+              void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
             }
           }
           // Handle errors
           if (eventType === 'error') {
-            console.error('SSE error event:', data);
             status = 'error';
             errorMessage = data.message || 'Compression failed';
             es.close();
             eventSource = null;
           }
         } catch (err) {
-          console.error('SSE parse error:', err, 'Raw:', event.data);
+          errorMessage = getErrorMessage(err);
         }
       };
 
-      es.onerror = (err) => {
-        console.error('SSE connection error:', err);
-        if (status === 'compressing') {
-          status = 'error';
-          errorMessage = 'Connection lost';
-        }
+      es.onerror = () => {
+        if (eventSource !== es) return;
         es.close();
         eventSource = null;
+        void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
       };
 
-    } catch (err: any) {
+    } catch (err) {
       // Don't show error if user cancelled
-      if (err.message === 'Upload cancelled') return;
+      if (err instanceof Error && err.message === 'Upload cancelled') return;
+      if (runToken !== activeRunToken) return;
       status = 'error';
-      errorMessage = err.message || 'Something went wrong';
+      errorMessage = getErrorMessage(err);
     }
   }
 
   async function handleCancel() {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
+    activeRunToken += 1;
+    finalizingRunToken = null;
+    statusPollFailures = 0;
+    closeProgressWatchers();
     if (taskId) {
       try {
-        await cancelJob(taskId);
+        await cancelJob(taskId, getApiAuth());
       } catch (e) {
         // Ignore cancel errors
       }
@@ -480,7 +609,7 @@
         </div>
       {:else if status === 'compressing'}
         <div class="progress-label">
-          <span>Compressing...</span>
+          <span>{progressLabel}</span>
           <span class="font-mono">{compressProgress}%</span>
         </div>
         <div class="progress-container">

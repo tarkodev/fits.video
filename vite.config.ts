@@ -4,6 +4,11 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [sveltekit()],
 	server: {
-		allowedHosts: ['dev.fits.video']
+		allowedHosts: ['dev.fits.video'],
+		hmr: {
+			protocol: 'wss',
+			host: 'dev.fits.video',
+			clientPort: 443
+		}
 	}
 });

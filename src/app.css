@@ -177,7 +177,8 @@ button:disabled {
 /* Inputs */
 input[type="text"],
 input[type="number"],
-input[type="url"] {
+ input[type="url"],
+ input[type="password"] {
   font-family: inherit;
   font-size: 1rem;
   background: var(--bg-secondary);

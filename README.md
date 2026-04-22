@@ -42,13 +42,15 @@ cp .env.example .env
 npm run dev
 ```
 
-The app will be available at `http://localhost:8000`
+The app will be available at `http://localhost:8002`
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://local.fits.video` |
+| `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://dev-local.fits.video` |
+| `PUBLIC_API_AUTH_USER` | Basic auth username used by the stock backend | `admin` |
+| `PUBLIC_API_AUTH_PASS` | Basic auth password used by the stock backend | `changeme` |
 
 ## 🛠️ Tech Stack
 
