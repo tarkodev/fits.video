@@ -42,13 +42,13 @@ cp .env.example .env
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`
+The app will be available at `http://localhost:8000`
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://video.elhacker.net` |
+| `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://local.fits.video` |
 
 ## 🛠️ Tech Stack
 

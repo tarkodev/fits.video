@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/public';
 
-const RAW = (env.PUBLIC_API_URL as string | undefined) || 'https://video.elhacker.net';
+const RAW = (env.PUBLIC_API_URL as string | undefined) || 'https://local.fits.video';
 const API = RAW && RAW.trim() !== '' ? RAW.replace(/\/$/, '') : '';
 
 export interface UploadResponse {
