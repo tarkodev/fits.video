@@ -5,6 +5,7 @@
     getDefaultApiAuth,
     getJobStatus,
     openProgressStream,
+    parseStreamEvent,
     startCompress,
     uploadFile,
     type ApiAuth
@@ -34,7 +35,11 @@
   let activeRunToken = $state(0);
   let finalizingRunToken = $state<number | null>(null);
   let statusPollFailures = $state(0);
-  let progressLabel = $state('Compressing...');
+  let displayedProgress = $state(0);
+  let etaLabel = $state<string | null>(null);
+  let currentSpeedX = $state<number | null>(null);
+  let hasProgress = $state(false);
+  let isFinalizing = $state(false);
 
   // Size presets
   const sizePresets = [8, 10, 25, 50, 100];
@@ -60,6 +65,94 @@
     return `${stem}_compressed.mp4`;
   }
 
+  function formatEta(seconds: number): string {
+    const totalSeconds = Math.max(1, Math.round(seconds));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+
+    if (hours > 0) return `${hours}h${String(minutes).padStart(2, '0')}m`;
+    if (minutes > 0) return `${minutes}m${String(remainingSeconds).padStart(2, '0')}s`;
+    return `${remainingSeconds}s`;
+  }
+
+  function resetCompressionTelemetry() {
+    compressProgress = 0;
+    displayedProgress = 0;
+    etaLabel = null;
+    currentSpeedX = null;
+    hasProgress = false;
+    isFinalizing = false;
+  }
+
+  function updateCompressionTelemetry(
+    progress: number,
+    options: {
+      phase?: string | null;
+      etaSeconds?: number | null;
+      speedX?: number | null;
+    } = {}
+  ) {
+    const boundedProgress = Math.max(0, Math.min(100, progress));
+    compressProgress = boundedProgress;
+
+    if (boundedProgress > 0) {
+      hasProgress = true;
+    }
+
+    const phase = options.phase ?? null;
+    if (phase === 'finalizing') {
+      isFinalizing = true;
+      etaLabel = null;
+      currentSpeedX = null;
+    } else if (phase === 'encoding') {
+      isFinalizing = false;
+    }
+
+    if (!isFinalizing && typeof options.speedX === 'number' && Number.isFinite(options.speedX) && options.speedX > 0) {
+      currentSpeedX = options.speedX;
+    }
+
+    if (!isFinalizing && boundedProgress < 99 && typeof options.etaSeconds === 'number' && Number.isFinite(options.etaSeconds) && options.etaSeconds > 0) {
+      etaLabel = formatEta(options.etaSeconds);
+    } else if (isFinalizing || boundedProgress >= 99) {
+      etaLabel = null;
+    }
+  }
+
+  $effect(() => {
+    if (compressProgress >= 100 || Math.abs(compressProgress - displayedProgress) > 10) {
+      displayedProgress = compressProgress;
+    } else if (compressProgress > displayedProgress) {
+      const diff = compressProgress - displayedProgress;
+      if (diff > 0.1) {
+        const step = Math.min(diff / 5, 1);
+        displayedProgress = Math.min(displayedProgress + step, compressProgress);
+      } else {
+        displayedProgress = compressProgress;
+      }
+    }
+  });
+
+  function getCompressionSummary(): string {
+    const parts: string[] = [];
+
+    if (finalizingRunToken !== null || isFinalizing || displayedProgress >= 99) {
+      parts.push('Almost fits the video!');
+    } else {
+      if (etaLabel) {
+        parts.push(`~${etaLabel}`);
+      }
+
+      if (currentSpeedX !== null) {
+        parts.push(`${currentSpeedX.toFixed(2)}x`);
+      }
+    }
+
+    parts.push(`${Math.ceil(displayedProgress)}%`);
+    return parts.join(' • ');
+  }
+
   function closeProgressWatchers() {
     if (eventSource) {
       eventSource.close();
@@ -76,6 +169,9 @@
     if (runToken !== activeRunToken) return;
     closeProgressWatchers();
     finalizingRunToken = null;
+    etaLabel = null;
+    currentSpeedX = null;
+    isFinalizing = false;
     status = 'error';
     errorMessage = message;
   }
@@ -92,7 +188,11 @@
     finalizingRunToken = runToken;
     closeProgressWatchers();
     compressProgress = 100;
-    progressLabel = 'Preparing download...';
+    displayedProgress = 100;
+    hasProgress = true;
+    etaLabel = null;
+    currentSpeedX = null;
+    isFinalizing = true;
 
     try {
       await downloadCompletedFile(completedTaskId, suggestedFilename, auth, 5);
@@ -124,13 +224,14 @@
       statusPollFailures = 0;
 
       if (typeof jobStatus.progress === 'number') {
-        compressProgress = Math.max(compressProgress, Math.round(jobStatus.progress));
+        updateCompressionTelemetry(jobStatus.progress);
       }
 
       const state = String(jobStatus.state || '').toUpperCase();
       const detail = String(jobStatus.detail || '').toLowerCase();
 
       if (state === 'SUCCESS' || detail === 'done') {
+        updateCompressionTelemetry(100, { phase: 'done' });
         const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
         await finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
         return;
@@ -164,12 +265,12 @@
       window.clearInterval(statusPollTimer);
     }
 
-    statusPollFailures = 0;
-    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-    statusPollTimer = window.setInterval(() => {
-      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-    }, 1500);
-  }
+	    statusPollFailures = 0;
+	    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+	    statusPollTimer = window.setInterval(() => {
+	      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+	    }, 1000);
+	  }
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -261,7 +362,7 @@
     activeRunToken += 1;
     finalizingRunToken = null;
     statusPollFailures = 0;
-    progressLabel = 'Compressing...';
+    resetCompressionTelemetry();
     // Abort ongoing upload if any
     if (uploadAbort) {
       uploadAbort();
@@ -274,7 +375,7 @@
     targetSize = 10;
     status = 'idle';
     uploadProgress = 0;
-    compressProgress = 0;
+    resetCompressionTelemetry();
     errorMessage = '';
     if (taskId) {
       cancelJob(taskId, getApiAuth()).catch(() => {});
@@ -294,13 +395,13 @@
     activeRunToken = runToken;
     finalizingRunToken = null;
     statusPollFailures = 0;
-    progressLabel = 'Compressing...';
+    resetCompressionTelemetry();
     const auth = getApiAuth();
 
     try {
       status = 'uploading';
       uploadProgress = 0;
-      compressProgress = 0;
+      resetCompressionTelemetry();
       errorMessage = '';
 
       // Upload file
@@ -368,54 +469,60 @@
       es.onmessage = (event) => {
         if (runToken !== activeRunToken) return;
 
-        try {
-          const data = JSON.parse(event.data);
-          statusPollFailures = 0;
-          
-          // Normalize type to lowercase for comparison
-          const eventType = (data.type || '').toLowerCase();
-          
-          // Skip ping/connected events
-          if (eventType === 'ping' || eventType === 'connected') {
-            return;
+        const data = parseStreamEvent(event.data);
+        if (!data) return;
+
+        statusPollFailures = 0;
+
+        if (data.type === 'ping' || data.type === 'connected') {
+          return;
+        }
+
+        if (data.type === 'progress') {
+          updateCompressionTelemetry(data.progress, {
+            phase: data.phase ?? null,
+            etaSeconds: data.eta_seconds ?? null,
+            speedX: data.speed_x ?? null
+          });
+
+          if (data.phase === 'done' || data.progress >= 100) {
+            const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
+            void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
           }
-          
-          // Handle progress events - API sends {type: 'progress', progress: 0-100}
-          if (eventType === 'progress' && typeof data.progress === 'number') {
-            compressProgress = Math.round(data.progress);
-          }
-          
-          // Handle log events - show that compression is active
-          if (eventType === 'log' && compressProgress === 0) {
-            // If we're receiving logs but no progress yet, show minimal progress
-            compressProgress = 1;
-          }
-          
-          // Handle completion - check multiple conditions
-          const isCompleted = 
-            eventType === 'completed' ||
-            eventType === 'done' ||
-            data.status === 'completed' ||
-            data.phase === 'done' ||
-            (eventType === 'progress' && data.progress >= 100);
-          
-          if (isCompleted) {
-            compressProgress = 100;
-            
-            if (activeTaskId) {
-              const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
-              void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
-            }
-          }
-          // Handle errors
-          if (eventType === 'error') {
-            status = 'error';
-            errorMessage = data.message || 'Compression failed';
-            es.close();
-            eventSource = null;
-          }
-        } catch (err) {
-          errorMessage = getErrorMessage(err);
+          return;
+        }
+
+        if (data.type === 'log') {
+          return;
+        }
+
+        if (data.type === 'retry') {
+          compressProgress = 1;
+          displayedProgress = 1;
+          hasProgress = true;
+          isFinalizing = false;
+          etaLabel = null;
+          currentSpeedX = null;
+          return;
+        }
+
+        if (data.type === 'canceled') {
+          failCompression('Compression cancelled', runToken);
+          return;
+        }
+
+        if (data.type === 'done') {
+          updateCompressionTelemetry(100, { phase: 'done' });
+          const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
+          void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+          return;
+        }
+
+        if (data.type === 'error') {
+          status = 'error';
+          errorMessage = data.message || 'Compression failed';
+          es.close();
+          eventSource = null;
         }
       };
 
@@ -609,11 +716,11 @@
         </div>
       {:else if status === 'compressing'}
         <div class="progress-label">
-          <span>{progressLabel}</span>
-          <span class="font-mono">{compressProgress}%</span>
+          <span>Compressing...</span>
+          <span class="font-mono">{getCompressionSummary()}</span>
         </div>
         <div class="progress-container">
-          <div class="progress-bar" style="width: {compressProgress}%"></div>
+          <div class="progress-bar" style="width: {displayedProgress}%"></div>
         </div>
       {:else if status === 'done'}
         <div class="status-done">
