@@ -140,18 +140,28 @@ The backend handles:
 ```
 fits.video/
 ├── src/
-│   ├── app.css           # Global styles
-│   ├── app.html          # HTML template
+│   ├── app.css                       # Global styles
+│   ├── app.html                      # HTML template
 │   ├── lib/
-│   │   └── api.ts        # API client
+│   │   ├── api.ts                    # HTTP / SSE client for 8mb.local
+│   │   ├── compression.svelte.ts     # Upload → compress → download state machine
+│   │   ├── format.ts                 # Pure formatting & validation helpers
+│   │   └── components/
+│   │       ├── EmptyDropZone.svelte  # Empty drop-zone with URL input
+│   │       ├── FilePreview.svelte    # Selected file preview + controls
+│   │       ├── ProgressDisplay.svelte # Upload / compression progress UI
+│   │       └── SizeSelector.svelte   # Target-size preset + custom input
 │   └── routes/
-│       └── +page.svelte  # Main page
+│       ├── +layout.svelte            # Root layout
+│       ├── +layout.ts                # Disables SSR (static adapter)
+│       └── +page.svelte              # Main page (file selection + orchestration)
 ├── static/
-│   ├── manifest.json     # PWA manifest
-│   └── icons/            # App icons
-├── Dockerfile            # Multi-stage image (builder + nginx)
-├── docker-compose.yml    # Docker setup
-└── nginx.conf            # Nginx config
+│   ├── manifest.json                 # PWA manifest
+│   └── icons/                        # App icons
+├── Dockerfile                        # Multi-stage image (builder + nginx)
+├── docker-compose.yml                # Docker setup
+├── nginx.conf                        # Nginx config (static + security headers)
+└── vite.config.ts                    # Dev server, env-driven host/port
 ```
 
 ## 🤝 Contributing
