@@ -23,6 +23,10 @@
 
   let videoEl = $state<HTMLVideoElement | null>(null);
   let isPlaying = $state(true);
+  const PREVIEW_NAME_START_CHARS = 25;
+  const PREVIEW_NAME_SUFFIX_CHARS_WITH_EXTENSION = 4;
+  const PREVIEW_NAME_SUFFIX_CHARS_WITHOUT_EXTENSION = 8;
+  let previewFileName = $derived(splitPreviewFileName(fileName));
 
   function togglePlay(e: MouseEvent) {
     e.stopPropagation();
@@ -34,6 +38,25 @@
       videoEl.pause();
       isPlaying = false;
     }
+  }
+
+  function splitPreviewFileName(name: string) {
+    const dotIndex = name.lastIndexOf('.');
+    const hasExtension = dotIndex > 0 && dotIndex < name.length - 1;
+    const base = hasExtension ? name.slice(0, dotIndex) : name;
+    const extension = hasExtension ? name.slice(dotIndex) : '';
+    const suffixLength = hasExtension
+      ? PREVIEW_NAME_SUFFIX_CHARS_WITH_EXTENSION
+      : PREVIEW_NAME_SUFFIX_CHARS_WITHOUT_EXTENSION;
+    const shortenedLength = PREVIEW_NAME_START_CHARS + 1 + suffixLength + extension.length;
+
+    if (name.length <= shortenedLength) {
+      return { shortened: false, prefix: name, suffix: '' };
+    }
+
+    const prefix = base.slice(0, PREVIEW_NAME_START_CHARS).trimEnd();
+    const suffix = `${base.slice(-suffixLength)}${extension}`;
+    return { shortened: true, prefix, suffix };
   }
 </script>
 
@@ -80,7 +103,15 @@
       {/if}
     </button>
     <div class="file-details">
-      <span class="file-name">{fileName}</span>
+      <span class="file-name" title={fileName}>
+        {#if previewFileName.shortened}
+          <span class="file-name-prefix">{previewFileName.prefix}</span>
+          <span class="file-name-ellipsis">…</span>
+          <span class="file-name-suffix">{previewFileName.suffix}</span>
+        {:else}
+          <span class="file-name-single">{previewFileName.prefix}</span>
+        {/if}
+      </span>
       {#if fileSize}
         <span class="file-size">{fileSize}</span>
       {/if}
@@ -172,12 +203,34 @@
   }
 
   .file-name {
+    display: flex;
+    align-items: baseline;
+    max-width: 100%;
+    min-width: 0;
     font-weight: 600;
     font-size: 1.1rem;
+    white-space: nowrap;
+    color: white;
+  }
+
+  .file-name-single {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: white;
+  }
+
+  .file-name-prefix {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: '';
+    white-space: nowrap;
+  }
+
+  .file-name-ellipsis,
+  .file-name-suffix {
+    flex: 0 0 auto;
   }
 
   .file-size {
