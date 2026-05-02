@@ -18,7 +18,7 @@
   let targetSize = $state(10);
   let customSize = $state('');
   let isCustom = $state(false);
-  
+
   // Upload / Compress state
   let taskId = $state<string | null>(null);
   let uploadProgress = $state(0);
@@ -38,7 +38,6 @@
   let displayedProgress = $state(0);
   let etaLabel = $state<string | null>(null);
   let currentSpeedX = $state<number | null>(null);
-  let hasProgress = $state(false);
   let isFinalizing = $state(false);
 
   // Size presets
@@ -49,10 +48,6 @@
   let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim()));
   let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
-
-  function getApiAuth(): ApiAuth {
-    return getDefaultApiAuth();
-  }
 
   function getErrorMessage(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
@@ -81,7 +76,6 @@
     displayedProgress = 0;
     etaLabel = null;
     currentSpeedX = null;
-    hasProgress = false;
     isFinalizing = false;
   }
 
@@ -95,10 +89,6 @@
   ) {
     const boundedProgress = Math.max(0, Math.min(100, progress));
     compressProgress = boundedProgress;
-
-    if (boundedProgress > 0) {
-      hasProgress = true;
-    }
 
     const phase = options.phase ?? null;
     if (phase === 'finalizing') {
@@ -189,7 +179,6 @@
     closeProgressWatchers();
     compressProgress = 100;
     displayedProgress = 100;
-    hasProgress = true;
     etaLabel = null;
     currentSpeedX = null;
     isFinalizing = true;
@@ -301,23 +290,40 @@
     isDragging = false;
   }
 
+  function isAcceptedFile(f: File): boolean {
+    // Mirror the <input accept="video/*,image/gif"> filter.
+    return f.type.startsWith('video/') || f.type === 'image/gif';
+  }
+
+  function rejectUnsupportedFile() {
+    status = 'error';
+    errorMessage = 'Unsupported file type. Drop a video or a GIF.';
+  }
+
   function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    const files = e.dataTransfer?.files;
-    if (files?.length) {
-      file = files[0];
-      setFile(files[0]);
+    if (!canOpenFilePicker()) return;
+    const dropped = e.dataTransfer?.files?.[0];
+    if (!dropped) return;
+    if (!isAcceptedFile(dropped)) {
+      rejectUnsupportedFile();
+      return;
     }
+    setFile(dropped);
   }
 
   function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
-    if (input.files && input.files.length > 0) {
-      setFile(input.files[0]);
-    }
-    // Reset input to allow re-selecting the same file
+    const picked = input.files?.[0];
+    // Reset input first so the user can re-select the same file later.
     input.value = '';
+    if (!picked) return;
+    if (!isAcceptedFile(picked)) {
+      rejectUnsupportedFile();
+      return;
+    }
+    setFile(picked);
   }
 
   function canOpenFilePicker(): boolean {
@@ -339,7 +345,7 @@
   function setFile(f: File) {
     file = f;
     url = ''; // Clear URL if file is selected
-    
+
     // Create preview URL
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(f);
@@ -394,7 +400,7 @@
     resetCompressionTelemetry();
     errorMessage = '';
     if (taskId) {
-      cancelJob(taskId, getApiAuth()).catch(() => {});
+      cancelJob(taskId, getDefaultApiAuth()).catch(() => {});
       taskId = null;
     }
     closeProgressWatchers();
@@ -412,7 +418,7 @@
     finalizingRunToken = null;
     statusPollFailures = 0;
     resetCompressionTelemetry();
-    const auth = getApiAuth();
+    const auth = getDefaultApiAuth();
 
     try {
       status = 'uploading';
@@ -457,7 +463,7 @@
 
       // Start compression - use the filename returned by the server, not the original
       status = 'compressing';
-      
+
       const compressResp = await startCompress({
         job_id: jobId,
         filename: serverFilename,
@@ -466,7 +472,7 @@
         video_codec: 'libx264'  // Use CPU fallback codec for maximum compatibility
       }, auth);
       if (runToken !== activeRunToken) return;
-      
+
       // Compress returns the actual task_id for SSE
       taskId = compressResp.task_id;
 
@@ -515,7 +521,6 @@
         if (data.type === 'retry') {
           compressProgress = 1;
           displayedProgress = 1;
-          hasProgress = true;
           isFinalizing = false;
           etaLabel = null;
           currentSpeedX = null;
@@ -558,20 +563,6 @@
     }
   }
 
-  async function handleCancel() {
-    activeRunToken += 1;
-    finalizingRunToken = null;
-    statusPollFailures = 0;
-    closeProgressWatchers();
-    if (taskId) {
-      try {
-        await cancelJob(taskId, getApiAuth());
-      } catch (e) {
-        // Ignore cancel errors
-      }
-    }
-    clearFile();
-  }
 </script>
 
 <div class="container">
@@ -694,8 +685,8 @@
   <div class="size-section">
     <div class="size-selector">
       <div class="size-track">
-        {#each sizePresets as size, i}
-          <button 
+        {#each sizePresets as size}
+          <button
             class="size-option"
             class:active={!isCustom && targetSize === size}
             onclick={() => selectPreset(size)}
@@ -706,8 +697,8 @@
           </button>
         {/each}
         <div class="size-option custom" class:active={isCustom}>
-          <input 
-            type="text" 
+          <input
+            type="text"
             inputmode="numeric"
             pattern="[0-9]*"
             maxlength="3"
@@ -760,8 +751,8 @@
   <!-- Action Button -->
   {#if status === 'idle'}
     <div class="action-section">
-      <button 
-        class="btn-primary compress-btn" 
+      <button
+        class="btn-primary compress-btn"
         onclick={compress}
         disabled={!canCompress}
       >
