@@ -351,9 +351,8 @@
     resetJobState();
     file = null;
     url = '';
-    customSize = '';
-    isCustom = false;
-    targetSize = 10;
+    // Size preference (preset / custom) is intentionally kept across
+    // clears and file swaps; only a full page reload resets it.
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = null;
