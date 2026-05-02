@@ -73,11 +73,32 @@ The output will be in the `build/` directory, ready to be served by any static f
 
 ### Docker Deployment
 
+A multi-stage `Dockerfile` is provided so `docker compose up` is the only
+command you need (no manual `npm run build` first):
+
 ```bash
-docker-compose up -d
+# Builds the image once, then runs it on port 8002.
+docker compose up -d --build
 ```
 
-This will serve the built static files via nginx on port 80.
+The first run takes ~1 minute (npm ci + Vite build). Subsequent
+`docker compose up -d` calls reuse the cached image and start instantly.
+Use `docker compose up -d --build` whenever you change the source code; the
+Docker layer cache will skip `npm ci` as long as `package*.json` haven't
+moved.
+
+If you want to point the build at a different backend, drop a `.env` next
+to the `Dockerfile` (it's gitignored) before building — SvelteKit inlines
+the `PUBLIC_*` values at build time:
+
+```bash
+cp .env.example .env
+# edit .env
+docker compose up -d --build
+```
+
+The `.env` is read inside the builder stage only and never lands in the
+final nginx image (only `/app/build` is copied across).
 
 ## 🔧 Backend
 
@@ -103,6 +124,7 @@ fits.video/
 ├── static/
 │   ├── manifest.json     # PWA manifest
 │   └── icons/            # App icons
+├── Dockerfile            # Multi-stage image (builder + nginx)
 ├── docker-compose.yml    # Docker setup
 └── nginx.conf            # Nginx config
 ```

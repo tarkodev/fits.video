@@ -1,0 +1,26 @@
+# Build artefacts and dev caches
+node_modules
+.svelte-kit
+build
+
+# VCS / editor noise
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Repo metadata not needed inside the image
+README.md
+LICENSE
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Logs
+*.log
+
+# Note: .env IS intentionally NOT excluded so SvelteKit can inline
+# PUBLIC_* values during `npm run build`. The .env never ships in the
+# final image because stage 2 only copies /app/build.
