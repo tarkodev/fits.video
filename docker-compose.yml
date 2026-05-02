@@ -6,5 +6,5 @@ services:
     image: fitsvideo-dev-front
     container_name: fitsvideo-dev-front
     ports:
-      - "8002:80"
+      - "${WEB_PORT:?WEB_PORT must be set in .env}:80"
     restart: unless-stopped

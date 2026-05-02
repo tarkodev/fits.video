@@ -34,36 +34,52 @@ cd fits.video
 # Install dependencies
 npm install
 
-# Configure the API endpoint
+# Configure environment (required, no defaults baked into the code)
 cp .env.example .env
-# Edit .env to point to your 8mb.local backend
+# Edit .env to point to your 8mb.local backend and tweak the bind/port
 
 # Start development server
 npm run dev
 ```
 
-The app will be available at `http://localhost:8002`
+With the stock `.env`, the app listens on `http://localhost:8002`.
 
 ### Environment Variables
 
+All variables in `.env.example` are required (with the exception of the
+`DEV_HMR_*` triplet, which is opt-in for proxied dev). The dev server
+and `vite build` will refuse to start if any required value is missing.
+
 Backend client (inlined into the bundle at build time):
 
-| Variable | Description | Default |
+| Variable | Description | Example |
 |----------|-------------|---------|
 | `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://dev-local.fits.video` |
 | `PUBLIC_API_AUTH_USER` | Basic auth username used by the stock backend | `admin` |
 | `PUBLIC_API_AUTH_PASS` | Basic auth password used by the stock backend | `changeme` |
 
-Dev server tuning (only read by `npm run dev`, never bundled):
+Web server bind (consumed by `npm run dev` **and** the `docker compose`
+host port mapping):
 
-| Variable | Description | Default |
+| Variable | Description | Example |
 |----------|-------------|---------|
-| `DEV_PORT` | Port `vite dev` listens on | `8002` |
-| `DEV_HOST` | Bind address for the dev server | `0.0.0.0` |
-| `DEV_ALLOWED_HOSTS` | Comma-separated extra hostnames (use `*` to allow any) | _none_ (loopback only) |
-| `DEV_HMR_HOST` | Public hostname the browser uses for HMR (set when behind a reverse proxy) | _disabled_ |
-| `DEV_HMR_PROTOCOL` | `ws` or `wss` for the HMR socket | _Vite default_ |
-| `DEV_HMR_CLIENT_PORT` | Public port the browser uses for HMR (e.g. `443` for HTTPS proxies) | _Vite default_ |
+| `WEB_HOST` | Bind address for the dev server | `0.0.0.0` |
+| `WEB_PORT` | Port `vite dev` listens on, and the host-side port for the docker container | `8002` |
+
+Vite dev server:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DEV_ALLOWED_HOSTS` | Comma-separated extra hostnames (loopback always works), or `*` to allow any | `*` (open) / `dev.fits.video` (restricted) |
+
+HMR over a TLS-terminating reverse proxy (optional — leave commented if
+you run on plain `localhost`):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DEV_HMR_HOST` | Public hostname the browser uses for HMR | `dev.fits.video` |
+| `DEV_HMR_PROTOCOL` | `ws` or `wss` for the HMR socket | `wss` |
+| `DEV_HMR_CLIENT_PORT` | Public port the browser uses for HMR | `443` |
 
 ## 🛠️ Tech Stack
 
@@ -90,7 +106,7 @@ A multi-stage `Dockerfile` is provided so `docker compose up` is the only
 command you need (no manual `npm run build` first):
 
 ```bash
-# Builds the image once, then runs it on port 8002.
+# Builds the image once, then runs it on the host port set by WEB_PORT in .env.
 docker compose up -d --build
 ```
 
