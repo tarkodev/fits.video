@@ -46,11 +46,24 @@ The app will be available at `http://localhost:8002`
 
 ### Environment Variables
 
+Backend client (inlined into the bundle at build time):
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://dev-local.fits.video` |
 | `PUBLIC_API_AUTH_USER` | Basic auth username used by the stock backend | `admin` |
 | `PUBLIC_API_AUTH_PASS` | Basic auth password used by the stock backend | `changeme` |
+
+Dev server tuning (only read by `npm run dev`, never bundled):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DEV_PORT` | Port `vite dev` listens on | `8002` |
+| `DEV_HOST` | Bind address for the dev server | `0.0.0.0` |
+| `DEV_ALLOWED_HOSTS` | Comma-separated extra hostnames (use `*` to allow any) | _none_ (loopback only) |
+| `DEV_HMR_HOST` | Public hostname the browser uses for HMR (set when behind a reverse proxy) | _disabled_ |
+| `DEV_HMR_PROTOCOL` | `ws` or `wss` for the HMR socket | _Vite default_ |
+| `DEV_HMR_CLIENT_PORT` | Public port the browser uses for HMR (e.g. `443` for HTTPS proxies) | _Vite default_ |
 
 ## 🛠️ Tech Stack
 
