@@ -39,7 +39,6 @@
   let errorMessage = $state('');
   let uploadProgress = $state(0);
   let compressProgress = $state(0);
-  let displayedProgress = $state(0);
   let etaLabel = $state<string | null>(null);
   let currentSpeedX = $state<number | null>(null);
   let isFinalizing = $state(false);
@@ -58,21 +57,9 @@
   );
   let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
-
-  // Smoothly catch up to the real progress so the bar doesn't jitter.
-  $effect(() => {
-    if (compressProgress >= 100 || Math.abs(compressProgress - displayedProgress) > 10) {
-      displayedProgress = compressProgress;
-    } else if (compressProgress > displayedProgress) {
-      const diff = compressProgress - displayedProgress;
-      if (diff > 0.1) {
-        const step = Math.min(diff / 5, 1);
-        displayedProgress = Math.min(displayedProgress + step, compressProgress);
-      } else {
-        displayedProgress = compressProgress;
-      }
-    }
-  });
+  // The progress bar relies on a CSS `transition: width` for smoothing,
+  // so the displayed value tracks the raw one one-to-one.
+  let displayedProgress = $derived(compressProgress);
 
   // --- Helpers --------------------------------------------------------------
   function getErrorMessage(err: unknown): string {
@@ -82,7 +69,6 @@
 
   function resetCompressionTelemetry() {
     compressProgress = 0;
-    displayedProgress = 0;
     etaLabel = null;
     currentSpeedX = null;
     isFinalizing = false;
@@ -161,7 +147,6 @@
     finalizingRunToken = runToken;
     closeProgressWatchers();
     compressProgress = 100;
-    displayedProgress = 100;
     etaLabel = null;
     currentSpeedX = null;
     isFinalizing = true;
@@ -464,7 +449,6 @@
 
         if (data.type === 'retry') {
           compressProgress = 1;
-          displayedProgress = 1;
           isFinalizing = false;
           etaLabel = null;
           currentSpeedX = null;
