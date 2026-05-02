@@ -1,0 +1,25 @@
+root = true
+
+[*]
+indent_style = tab
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Markup, styles, configs that traditionally use 2-space indents.
+[*.{svelte,css,scss,html,yaml,yml,json}]
+indent_style = space
+indent_size = 2
+
+# Markdown — same convention, but keep trailing whitespace (line breaks).
+[*.md]
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false
+
+# Dotenv files: 2-space style for the comments.
+[.env*]
+indent_style = space
+indent_size = 2

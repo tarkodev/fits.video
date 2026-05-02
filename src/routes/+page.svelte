@@ -10,106 +10,56 @@
     uploadFile,
     type ApiAuth
   } from '$lib/api';
+  import {
+    buildDownloadFilename,
+    formatBytes,
+    formatEta,
+    isAcceptedFile
+  } from '$lib/format';
+  import EmptyDropZone from '$lib/components/EmptyDropZone.svelte';
+  import FilePreview from '$lib/components/FilePreview.svelte';
+  import ProgressDisplay from '$lib/components/ProgressDisplay.svelte';
+  import SizeSelector from '$lib/components/SizeSelector.svelte';
 
-  // State
+  // --- Input state ----------------------------------------------------------
   let file = $state<File | null>(null);
   let url = $state('');
   let previewUrl = $state<string | null>(null);
+  let aspectRatio = $state(56.25); // Default 16:9 expressed as height/width %.
+  let isDragging = $state(false);
+
   let targetSize = $state(10);
   let customSize = $state('');
   let isCustom = $state(false);
+  const sizePresets = [8, 10, 25, 50, 100];
 
-  // Upload / Compress state
+  // --- Job state ------------------------------------------------------------
   let taskId = $state<string | null>(null);
-  let uploadProgress = $state(0);
-  let compressProgress = $state(0);
   let status = $state<'idle' | 'uploading' | 'compressing' | 'done' | 'error'>('idle');
   let errorMessage = $state('');
-  let isDragging = $state(false);
-  let eventSource = $state<EventSource | null>(null);
-  let statusPollTimer = $state<number | null>(null);
-  let uploadAbort = $state<(() => void) | null>(null);
-  let isPlaying = $state(true);
-  let previewVideo = $state<HTMLVideoElement | null>(null);
-  let aspectRatio = $state(56.25); // Default 16:9 (9/16 * 100)
-  let activeRunToken = $state(0);
-  let finalizingRunToken = $state<number | null>(null);
-  let statusPollFailures = $state(0);
+  let uploadProgress = $state(0);
+  let compressProgress = $state(0);
   let displayedProgress = $state(0);
   let etaLabel = $state<string | null>(null);
   let currentSpeedX = $state<number | null>(null);
   let isFinalizing = $state(false);
 
-  // Size presets
-  const sizePresets = [8, 10, 25, 50, 100];
+  let eventSource = $state<EventSource | null>(null);
+  let statusPollTimer = $state<number | null>(null);
+  let uploadAbort = $state<(() => void) | null>(null);
+  let activeRunToken = $state(0);
+  let finalizingRunToken = $state<number | null>(null);
+  let statusPollFailures = $state(0);
 
-  // Computed
+  // --- Derived --------------------------------------------------------------
   let selectedSize = $derived(isCustom ? (parseFloat(customSize) || 8) : targetSize);
-  let canCompress = $derived((file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim()));
+  let canCompress = $derived(
+    (file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim())
+  );
   let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
 
-  function getErrorMessage(err: unknown): string {
-    if (err instanceof Error && err.message) return err.message;
-    return 'Something went wrong';
-  }
-
-  function buildDownloadFilename(sourceName: string): string {
-    const fallback = sourceName.trim() || 'video';
-    const stem = fallback.replace(/\.[^/.]+$/, '') || fallback;
-    return `${stem}_compressed.mp4`;
-  }
-
-  function formatEta(seconds: number): string {
-    const totalSeconds = Math.max(1, Math.round(seconds));
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const remainingSeconds = totalSeconds % 60;
-
-    if (hours > 0) return `${hours}h${String(minutes).padStart(2, '0')}m`;
-    if (minutes > 0) return `${minutes}m${String(remainingSeconds).padStart(2, '0')}s`;
-    return `${remainingSeconds}s`;
-  }
-
-  function resetCompressionTelemetry() {
-    compressProgress = 0;
-    displayedProgress = 0;
-    etaLabel = null;
-    currentSpeedX = null;
-    isFinalizing = false;
-  }
-
-  function updateCompressionTelemetry(
-    progress: number,
-    options: {
-      phase?: string | null;
-      etaSeconds?: number | null;
-      speedX?: number | null;
-    } = {}
-  ) {
-    const boundedProgress = Math.max(0, Math.min(100, progress));
-    compressProgress = boundedProgress;
-
-    const phase = options.phase ?? null;
-    if (phase === 'finalizing') {
-      isFinalizing = true;
-      etaLabel = null;
-      currentSpeedX = null;
-    } else if (phase === 'encoding') {
-      isFinalizing = false;
-    }
-
-    if (!isFinalizing && typeof options.speedX === 'number' && Number.isFinite(options.speedX) && options.speedX > 0) {
-      currentSpeedX = options.speedX;
-    }
-
-    if (!isFinalizing && boundedProgress < 99 && typeof options.etaSeconds === 'number' && Number.isFinite(options.etaSeconds) && options.etaSeconds > 0) {
-      etaLabel = formatEta(options.etaSeconds);
-    } else if (isFinalizing || boundedProgress >= 99) {
-      etaLabel = null;
-    }
-  }
-
+  // Smoothly catch up to the real progress so the bar doesn't jitter.
   $effect(() => {
     if (compressProgress >= 100 || Math.abs(compressProgress - displayedProgress) > 10) {
       displayedProgress = compressProgress;
@@ -124,31 +74,64 @@
     }
   });
 
-  function getCompressionSummary(): string {
-    const parts: string[] = [];
+  // --- Helpers --------------------------------------------------------------
+  function getErrorMessage(err: unknown): string {
+    if (err instanceof Error && err.message) return err.message;
+    return 'Something went wrong';
+  }
 
+  function resetCompressionTelemetry() {
+    compressProgress = 0;
+    displayedProgress = 0;
+    etaLabel = null;
+    currentSpeedX = null;
+    isFinalizing = false;
+  }
+
+  function updateCompressionTelemetry(
+    progress: number,
+    options: { phase?: string | null; etaSeconds?: number | null; speedX?: number | null } = {}
+  ) {
+    const bounded = Math.max(0, Math.min(100, progress));
+    compressProgress = bounded;
+
+    const phase = options.phase ?? null;
+    if (phase === 'finalizing') {
+      isFinalizing = true;
+      etaLabel = null;
+      currentSpeedX = null;
+    } else if (phase === 'encoding') {
+      isFinalizing = false;
+    }
+
+    if (!isFinalizing && typeof options.speedX === 'number' && Number.isFinite(options.speedX) && options.speedX > 0) {
+      currentSpeedX = options.speedX;
+    }
+
+    if (!isFinalizing && bounded < 99 && typeof options.etaSeconds === 'number' && Number.isFinite(options.etaSeconds) && options.etaSeconds > 0) {
+      etaLabel = formatEta(options.etaSeconds);
+    } else if (isFinalizing || bounded >= 99) {
+      etaLabel = null;
+    }
+  }
+
+  let compressionSummary = $derived.by(() => {
+    const parts: string[] = [];
     if (finalizingRunToken !== null || isFinalizing || displayedProgress >= 99) {
       parts.push('Almost fits the video!');
     } else {
-      if (etaLabel) {
-        parts.push(`~${etaLabel}`);
-      }
-
-      if (currentSpeedX !== null) {
-        parts.push(`${currentSpeedX.toFixed(2)}x`);
-      }
+      if (etaLabel) parts.push(`~${etaLabel}`);
+      if (currentSpeedX !== null) parts.push(`${currentSpeedX.toFixed(2)}x`);
     }
-
     parts.push(`${Math.ceil(displayedProgress)}%`);
     return parts.join(' • ');
-  }
+  });
 
   function closeProgressWatchers() {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
     }
-
     if (statusPollTimer !== null) {
       window.clearInterval(statusPollTimer);
       statusPollTimer = null;
@@ -221,8 +204,8 @@
 
       if (state === 'SUCCESS' || detail === 'done') {
         updateCompressionTelemetry(100, { phase: 'done' });
-        const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
-        await finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+        const suggested = buildDownloadFilename(file?.name || serverFilename);
+        await finalizeDownload(activeTaskId, suggested, auth, runToken);
         return;
       }
 
@@ -253,7 +236,6 @@
     if (statusPollTimer !== null) {
       window.clearInterval(statusPollTimer);
     }
-
     statusPollFailures = 0;
     void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
     statusPollTimer = window.setInterval(() => {
@@ -261,38 +243,31 @@
     }, 1000);
   }
 
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  // --- File input handling --------------------------------------------------
+  function canOpenFilePicker(): boolean {
+    return status === 'idle' || status === 'done' || status === 'error';
   }
 
-  function selectPreset(size: number) {
-    targetSize = size;
-    isCustom = false;
-    customSize = '';
+  function openFilePicker() {
+    if (!canOpenFilePicker()) return;
+    document.getElementById('file-input')?.click();
   }
 
-  function enableCustom() {
-    isCustom = true;
+  function handleDropZoneKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement) return;
+    e.preventDefault();
+    openFilePicker();
   }
 
-  // Drag & Drop handlers
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
-    if (status !== 'idle' && status !== 'error' && status !== 'done') return; // Prevent drag during processing
+    if (status !== 'idle' && status !== 'error' && status !== 'done') return;
     isDragging = true;
   }
 
   function handleDragLeave() {
     isDragging = false;
-  }
-
-  function isAcceptedFile(f: File): boolean {
-    // Mirror the <input accept="video/*,image/gif"> filter.
-    return f.type.startsWith('video/') || f.type === 'image/gif';
   }
 
   function rejectUnsupportedFile() {
@@ -316,7 +291,7 @@
   function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     const picked = input.files?.[0];
-    // Reset input first so the user can re-select the same file later.
+    // Reset input so the user can re-select the same file later.
     input.value = '';
     if (!picked) return;
     if (!isAcceptedFile(picked)) {
@@ -326,31 +301,12 @@
     setFile(picked);
   }
 
-  function canOpenFilePicker(): boolean {
-    return status === 'idle' || status === 'done' || status === 'error';
-  }
-
-  function openFilePicker() {
-    if (!canOpenFilePicker()) return;
-    document.getElementById('file-input')?.click();
-  }
-
-  function handleDropZoneKey(e: KeyboardEvent) {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement) return;
-    e.preventDefault();
-    openFilePicker();
-  }
-
   function setFile(f: File) {
     file = f;
-    url = ''; // Clear URL if file is selected
-
-    // Create preview URL
+    url = '';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     previewUrl = URL.createObjectURL(f);
-    isPlaying = true;
-    aspectRatio = 56.25; // Reset to default while loading
+    aspectRatio = 56.25;
   }
 
   function handleVideoLoaded(e: Event) {
@@ -367,25 +323,12 @@
     }
   }
 
-  function togglePreview(e: Event) {
-    e.stopPropagation();
-    if (previewVideo) {
-      if (previewVideo.paused) {
-        previewVideo.play();
-        isPlaying = true;
-      } else {
-        previewVideo.pause();
-        isPlaying = false;
-      }
-    }
-  }
-
-  function clearFile() {
+  function clearFile(e?: MouseEvent) {
+    e?.stopPropagation();
     activeRunToken += 1;
     finalizingRunToken = null;
     statusPollFailures = 0;
     resetCompressionTelemetry();
-    // Abort ongoing upload if any
     if (uploadAbort) {
       uploadAbort();
       uploadAbort = null;
@@ -410,6 +353,7 @@
     }
   }
 
+  // --- Compression flow -----------------------------------------------------
   async function compress() {
     if (!canCompress) return;
 
@@ -426,11 +370,10 @@
       resetCompressionTelemetry();
       errorMessage = '';
 
-      // Upload file
       let jobId: string | undefined;
       let serverFilename: string = '';
       if (file) {
-        // Apply 5% safety margin for MB/MiB differences
+        // 5% safety margin to absorb MB/MiB rounding on the backend.
         const safeSize = selectedSize * 0.95;
         const { promise, abort } = uploadFile(
           file,
@@ -446,7 +389,6 @@
         const uploadResp = await promise;
         if (runToken !== activeRunToken) return;
         uploadAbort = null;
-        // API returns job_id from upload
         jobId = uploadResp.job_id;
         serverFilename = uploadResp.filename || file.name;
       } else if (url.trim()) {
@@ -461,7 +403,6 @@
         return;
       }
 
-      // Start compression - use the filename returned by the server, not the original
       status = 'compressing';
 
       const compressResp = await startCompress({
@@ -469,11 +410,10 @@
         filename: serverFilename,
         target_size_mb: selectedSize,
         audio_bitrate_kbps: 128,
-        video_codec: 'libx264'  // Use CPU fallback codec for maximum compatibility
+        video_codec: 'libx264'
       }, auth);
       if (runToken !== activeRunToken) return;
 
-      // Compress returns the actual task_id for SSE
       taskId = compressResp.task_id;
 
       if (!taskId) {
@@ -482,7 +422,6 @@
         return;
       }
 
-      // Listen for progress via SSE
       const activeTaskId = taskId;
       startJobStatusPolling(activeTaskId, serverFilename, auth, runToken);
       const es = openProgressStream(activeTaskId);
@@ -496,9 +435,7 @@
 
         statusPollFailures = 0;
 
-        if (data.type === 'ping' || data.type === 'connected') {
-          return;
-        }
+        if (data.type === 'ping' || data.type === 'connected') return;
 
         if (data.type === 'progress') {
           updateCompressionTelemetry(data.progress, {
@@ -508,15 +445,13 @@
           });
 
           if (data.phase === 'done' || data.progress >= 100) {
-            const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
-            void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+            const suggested = buildDownloadFilename(file?.name || serverFilename);
+            void finalizeDownload(activeTaskId, suggested, auth, runToken);
           }
           return;
         }
 
-        if (data.type === 'log') {
-          return;
-        }
+        if (data.type === 'log') return;
 
         if (data.type === 'retry') {
           compressProgress = 1;
@@ -534,8 +469,8 @@
 
         if (data.type === 'done') {
           updateCompressionTelemetry(100, { phase: 'done' });
-          const suggestedFilename = buildDownloadFilename(file?.name || serverFilename);
-          void finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+          const suggested = buildDownloadFilename(file?.name || serverFilename);
+          void finalizeDownload(activeTaskId, suggested, auth, runToken);
           return;
         }
 
@@ -553,26 +488,21 @@
         eventSource = null;
         void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
       };
-
     } catch (err) {
-      // Don't show error if user cancelled
       if (err instanceof Error && err.message === 'Upload cancelled') return;
       if (runToken !== activeRunToken) return;
       status = 'error';
       errorMessage = getErrorMessage(err);
     }
   }
-
 </script>
 
 <div class="container">
-  <!-- Header -->
   <header class="header">
     <h1 class="logo">fits<span class="accent">.video</span></h1>
     <p class="tagline">MP4, GIF, whatever: now it fits.</p>
   </header>
 
-  <!-- Hidden file input always present -->
   <input
     id="file-input"
     type="file"
@@ -596,159 +526,43 @@
     aria-label="Choose a video file"
   >
     {#if file}
-      <div class="file-preview-card fade-in" style="aspect-ratio: 100 / {Math.min(aspectRatio, 75)};">
-        {#if previewUrl}
-          {#if file?.type.startsWith('video/')}
-            <video
-              bind:this={previewVideo}
-              src={previewUrl}
-              muted
-              playsinline
-              loop
-              autoplay
-              class="bg-video"
-              onloadedmetadata={handleVideoLoaded}
-            ></video>
-          {:else if file?.type.startsWith('image/')}
-            <img
-              src={previewUrl}
-              alt="Preview"
-              class="bg-video"
-              onload={handleImageLoaded}
-            />
-          {/if}
-          <div class="video-overlay"></div>
-        {/if}
-
-        <div class="preview-content">
-          <button
-            type="button"
-            class="file-icon"
-            class:clickable={!!previewUrl}
-            onclick={(e) => { e.stopPropagation(); if (previewUrl) togglePreview(e); }}
-            disabled={!previewUrl}
-          >
-            {#if previewUrl && file?.type.startsWith('video/')}
-              {#if isPlaying}
-                <!-- Pause Icon -->
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
-              {:else}
-                <!-- Play Icon -->
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-              {/if}
-            {:else}
-              <!-- Video Icon -->
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-            {/if}
-          </button>
-          <div class="file-details">
-            <span class="file-name">{fileName}</span>
-            {#if fileSize}
-              <span class="file-size">{fileSize}</span>
-            {/if}
-          </div>
-          <button
-            type="button"
-            class="btn-clear"
-            onclick={(e) => { e.stopPropagation(); clearFile(); }}
-            aria-label="Cancel"
-          >×</button>
-        </div>
-      </div>
+      <FilePreview
+        {file}
+        {previewUrl}
+        {aspectRatio}
+        {fileName}
+        {fileSize}
+        onClear={clearFile}
+        onVideoLoaded={handleVideoLoaded}
+        onImageLoaded={handleImageLoaded}
+      />
     {:else}
-      <div class="drop-content">
-        <div class="drop-icon">📁</div>
-        <p class="drop-text">
-          <strong>Drag & Drop</strong> your video here
-        </p>
-        <p class="drop-subtext text-muted text-sm">or click to choose from your device</p>
-
-        <div class="divider">
-          <span>OR</span>
-        </div>
-
-        <div class="url-input-wrapper">
-          <span class="url-icon">🔗</span>
-          <input
-            type="url"
-            placeholder="Paste a direct video URL"
-            bind:value={url}
-            onclick={(e) => e.stopPropagation()}
-            onkeydown={(e) => e.stopPropagation()}
-          />
-        </div>
-      </div>
+      <EmptyDropZone {url} onUrlChange={(v) => (url = v)} />
     {/if}
   </div>
 
-  <!-- Size Selector -->
-  <div class="size-section">
-    <div class="size-selector">
-      <div class="size-track">
-        {#each sizePresets as size}
-          <button
-            class="size-option"
-            class:active={!isCustom && targetSize === size}
-            onclick={() => selectPreset(size)}
-            disabled={status !== 'idle'}
-          >
-            <span class="size-value">{size}</span>
-            <span class="size-unit">MB</span>
-          </button>
-        {/each}
-        <div class="size-option custom" class:active={isCustom}>
-          <input
-            type="text"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            maxlength="3"
-            placeholder="..."
-            bind:value={customSize}
-            onfocus={enableCustom}
-            oninput={(e) => { customSize = (e.target as HTMLInputElement).value.replace(/[^0-9]/g, '').slice(0, 3); }}
-            disabled={status !== 'idle'}
-          />
-          <span class="size-unit">MB</span>
-        </div>
-      </div>
-    </div>
-  </div>
+  <SizeSelector
+    {sizePresets}
+    {targetSize}
+    {customSize}
+    {isCustom}
+    disabled={status !== 'idle'}
+    onSelectPreset={(size) => { targetSize = size; isCustom = false; customSize = ''; }}
+    onEnableCustom={() => (isCustom = true)}
+    onCustomSizeChange={(v) => (customSize = v)}
+  />
 
-  <!-- Progress -->
   {#if status !== 'idle'}
-    <div class="progress-section fade-in">
-      {#if status === 'uploading'}
-        <div class="progress-label">
-          <span>Uploading...</span>
-          <span class="font-mono">{uploadProgress}%</span>
-        </div>
-        <div class="progress-container">
-          <div class="progress-bar" style="width: {uploadProgress}%"></div>
-        </div>
-      {:else if status === 'compressing'}
-        <div class="progress-label">
-          <span>Compressing...</span>
-          <span class="font-mono">{getCompressionSummary()}</span>
-        </div>
-        <div class="progress-container">
-          <div class="progress-bar" style="width: {displayedProgress}%"></div>
-        </div>
-      {:else if status === 'done'}
-        <div class="status-done">
-          <span class="status-icon">✅</span>
-          <span>Done! Download started.</span>
-        </div>
-      {:else if status === 'error'}
-        <div class="status-error">
-          <span class="status-icon">💔</span>
-          <span>{errorMessage || 'An error occurred'}</span>
-          <button class="btn-dismiss" onclick={() => { status = 'idle'; errorMessage = ''; }} aria-label="Dismiss">×</button>
-        </div>
-      {/if}
-    </div>
+    <ProgressDisplay
+      {status}
+      {uploadProgress}
+      {compressionSummary}
+      {displayedProgress}
+      {errorMessage}
+      onDismiss={() => { status = 'idle'; errorMessage = ''; }}
+    />
   {/if}
 
-  <!-- Action Button -->
   {#if status === 'idle'}
     <div class="action-section">
       <button
@@ -761,7 +575,6 @@
     </div>
   {/if}
 
-  <!-- Footer -->
   <footer class="footer">
     <div class="footer-powered">
       Powered by <a href="https://github.com/JMS1717/8mb.local" target="_blank" rel="noopener">8mb.local</a>
@@ -776,9 +589,6 @@
       <a href="https://discord.gg/QGGC8hEJA8" target="_blank" rel="noopener" aria-label="Discord" title="Discord">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>
       </a>
-      <!-- <a href="/about" aria-label="About" title="About">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-      </a> -->
     </div>
   </footer>
 </div>
@@ -811,7 +621,6 @@
     margin-top: 8px;
   }
 
-  /* Drop Zone */
   .drop-zone {
     position: relative;
     min-height: 200px;
@@ -836,9 +645,7 @@
 
   .drop-zone.processing {
     cursor: wait;
-    /* pointer-events: none; Removed to allow play button interaction */
-    /* opacity: 0.7; Removed to keep video visible */
-    border-color: var(--accent-glow); /* Add some visual cue it's processing */
+    border-color: var(--accent-glow);
   }
 
   .file-input-hidden {
@@ -849,350 +656,12 @@
     pointer-events: none;
   }
 
-  .drop-content {
-    text-align: center;
-    padding: 20px;
-  }
-
-  .drop-icon {
-    font-size: 3rem;
-    margin-bottom: 12px;
-  }
-
-  .drop-text {
-    font-size: 1.1rem;
-  }
-
-  .drop-subtext {
-    margin-top: 4px;
-  }
-
-  .divider {
-    display: flex;
-    align-items: center;
-    margin: 20px 0;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-  }
-
-  .divider::before,
-  .divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--glass-border);
-  }
-
-  .divider span {
-    padding: 0 12px;
-  }
-
-  .url-input-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-
-  .url-icon {
-    position: absolute;
-    left: 12px;
-    font-size: 1rem;
-    pointer-events: none;
-  }
-
-  .url-input-wrapper input {
-    padding-left: 40px;
-  }
-
-  /* File Info / Preview Card */
-  .file-preview-card {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    height: 100%;
-    position: relative;
-    overflow: hidden;
-    border-radius: 16px;
-    background: var(--bg-card);
-  }
-
-  .bg-video {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    opacity: 0.6;
-  }
-
-  .video-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.4));
-  }
-
-  .preview-content {
-    position: relative;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 20px;
-    height: 100%;
-    justify-content: space-between;
-  }
-
-  .file-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    background: rgba(255,255,255,0.15);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 8px;
-    backdrop-filter: blur(4px);
-    font-size: 1.25rem;
-    color: white;
-    line-height: 1;
-    padding: 0;
-  }
-
-  .file-icon:disabled {
-    cursor: default;
-  }
-
-
-
-  .file-icon.clickable {
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .file-icon.clickable:hover {
-    background: rgba(255,255,255,0.2);
-    transform: scale(1.05);
-  }
-
-
-
-  .file-details {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    gap: 4px;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
-  }
-
-  .file-name {
-    font-weight: 600;
-    font-size: 1.1rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: white;
-  }
-
-  .file-size {
-    font-size: 0.875rem;
-    color: rgba(255,255,255,0.8);
-  }
-
-  .btn-clear {
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    font-size: 1.5rem;
-    line-height: 1;
-    background: rgba(255,255,255,0.15);
-    color: white;
-    border-radius: 50%;
-    backdrop-filter: blur(4px);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(255,255,255,0.1);
-    padding-bottom: 3px; /* Visual correction for X */
-  }
-
-  .btn-clear:hover:not(:disabled) {
-    background: var(--error);
-    border-color: var(--error);
-    transform: scale(1.05);
-  }
-
-  .btn-clear:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-
-  .drop-zone.processing .bg-video {
-    /* opacity: 0.3; Removed */
-    /* filter: grayscale(1); Removed */
-    opacity: 0.5; /* Just dim it slightly instead of grayscale */
-  }
-
-  /* Size Selector - Segmented Control Style */
-  .size-section {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .size-selector {
-    width: 100%;
-  }
-
-  .size-track {
-    display: flex;
-    background: var(--bg-card);
-    border: 1px solid var(--glass-border);
-    border-radius: 12px;
-    padding: 4px;
-    gap: 2px;
-  }
-
-  .size-option {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    padding: 12px 8px;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    font-weight: 500;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .size-option:hover:not(:disabled):not(.active) {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-
-  .size-option.active {
-    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-    color: white;
-    font-weight: 600;
-    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
-  }
-
-  .size-option:disabled {
+  /* Reuse the bg-video styling from the FilePreview component to keep the
+     "dim while processing" cue when the preview is rendered as a child. */
+  .drop-zone.processing :global(.bg-video) {
     opacity: 0.5;
-    cursor: not-allowed;
   }
 
-  .size-value {
-    font-weight: inherit;
-  }
-
-  .size-unit {
-    font-size: 0.7rem;
-    opacity: 0.7;
-    font-weight: 400;
-  }
-
-  .size-option.custom {
-    min-width: 70px;
-    flex: 0.8;
-    padding: 8px;
-    gap: 4px;
-  }
-
-  .size-option.custom input {
-    width: 40px;
-    background: transparent;
-    border: none;
-    color: inherit;
-    font-size: 0.95rem;
-    font-weight: inherit;
-    text-align: center;
-    padding: 0;
-  }
-
-  .size-option.custom input::placeholder {
-    color: var(--text-muted);
-  }
-
-  .size-option.custom input:focus {
-    outline: none;
-  }
-
-  .size-option.custom.active input {
-    color: white;
-  }
-
-  .size-option.custom.active input::placeholder {
-    color: rgba(255,255,255,0.6);
-  }
-
-  /* Progress Section */
-  .progress-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .progress-label {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.875rem;
-  }
-
-  .status-done,
-  .status-error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 12px;
-    border-radius: var(--border-radius);
-    font-weight: 500;
-  }
-
-  .status-done {
-    background: rgba(34, 197, 94, 0.1);
-    color: var(--success);
-  }
-
-  .status-error {
-    position: relative;
-    background: rgba(239, 68, 68, 0.1);
-    color: var(--error);
-    padding-right: 36px;
-  }
-
-  .status-icon {
-    font-size: 1.25rem;
-  }
-
-  .btn-dismiss {
-    position: absolute;
-    right: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: transparent;
-    border: none;
-    color: inherit;
-    font-size: 1.25rem;
-    cursor: pointer;
-    opacity: 0.7;
-    padding: 0 4px;
-    line-height: 1;
-  }
-
-  .btn-dismiss:hover {
-    opacity: 1;
-  }
-
-  /* Action Section */
   .action-section {
     display: flex;
     justify-content: center;
@@ -1208,7 +677,6 @@
     white-space: nowrap;
   }
 
-  /* Footer */
   .footer {
     display: flex;
     flex-direction: column;
@@ -1264,7 +732,6 @@
     height: 20px;
   }
 
-  /* Responsive */
   @media (max-width: 480px) {
     .logo {
       font-size: 2rem;
@@ -1272,11 +739,6 @@
 
     .drop-zone {
       min-height: 180px;
-    }
-
-    .size-option {
-      min-width: 50px;
-      padding: 8px 12px;
     }
   }
 </style>

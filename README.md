@@ -21,7 +21,7 @@ A modern, free video compression web app. Compress your videos to a specific fil
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.19+ (required by `@sveltejs/vite-plugin-svelte`)
 - A running [8mb.local](https://github.com/JMS1717/8mb.local) backend
 
 ### Installation
