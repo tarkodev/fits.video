@@ -446,10 +446,15 @@ export function uploadFile(
 	const promise = new Promise<UploadResponse>((resolve, reject) => {
 		const fd = new FormData();
 		fd.append('file', file);
-		fd.append('target_size_mb', String(targetSizeMB));
-		fd.append('audio_bitrate_kbps', String(audioKbps));
 
-		xhr.open('POST', toApiUrl('/api/upload'));
+		// FastAPI reads target_size_mb / audio_bitrate_kbps as query parameters
+		// (no Form(...) on the backend signature), so we must send them in the URL.
+		const params = new URLSearchParams({
+			target_size_mb: String(targetSizeMB),
+			audio_bitrate_kbps: String(audioKbps)
+		});
+
+		xhr.open('POST', toApiUrl(`/api/upload?${params.toString()}`));
 
 		const authorization = buildBasicAuthHeader(auth);
 		if (authorization) {
@@ -463,14 +468,14 @@ export function uploadFile(
 			}
 		};
 
-			xhr.onload = () => {
-				try {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						resolve(parseUploadResponse(xhr.responseText || '{}'));
-					} else if (xhr.status === 401) {
-						reject(new Error('API authentication failed. Check the backend username and password.'));
-					} else {
-						reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+		xhr.onload = () => {
+			try {
+				if (xhr.status >= 200 && xhr.status < 300) {
+					resolve(parseUploadResponse(xhr.responseText || '{}'));
+				} else if (xhr.status === 401) {
+					reject(new Error('API authentication failed. Check the backend username and password.'));
+				} else {
+					reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
 				}
 			} catch (err) {
 				reject(err);

@@ -265,12 +265,12 @@
       window.clearInterval(statusPollTimer);
     }
 
-	    statusPollFailures = 0;
-	    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-	    statusPollTimer = window.setInterval(() => {
-	      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-	    }, 1000);
-	  }
+    statusPollFailures = 0;
+    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+    statusPollTimer = window.setInterval(() => {
+      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+    }, 1000);
+  }
 
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -318,6 +318,22 @@
     }
     // Reset input to allow re-selecting the same file
     input.value = '';
+  }
+
+  function canOpenFilePicker(): boolean {
+    return status === 'idle' || status === 'done' || status === 'error';
+  }
+
+  function openFilePicker() {
+    if (!canOpenFilePicker()) return;
+    document.getElementById('file-input')?.click();
+  }
+
+  function handleDropZoneKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement) return;
+    e.preventDefault();
+    openFilePicker();
   }
 
   function setFile(f: File) {
@@ -566,17 +582,15 @@
   </header>
 
   <!-- Hidden file input always present -->
-  <input 
+  <input
     id="file-input"
-    type="file" 
-    accept="video/*,image/gif" 
-    class="file-input-hidden" 
+    type="file"
+    accept="video/*,image/gif"
+    class="file-input-hidden"
     onchange={handleFileSelect}
   />
 
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <label 
-    for="file-input"
+  <div
     class="drop-zone card"
     class:dragging={isDragging}
     class:has-file={!!file}
@@ -584,25 +598,29 @@
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
+    onclick={openFilePicker}
+    onkeydown={handleDropZoneKey}
+    role="button"
+    tabindex="0"
+    aria-label="Choose a video file"
   >
     {#if file}
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="file-preview-card fade-in" style="aspect-ratio: 100 / {Math.min(aspectRatio, 75)};" onclick={(e) => { e.stopPropagation(); e.preventDefault(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); if (status === 'idle' || status === 'done' || status === 'error') document.getElementById('file-input')?.click(); } }} role="button" tabindex="0">
+      <div class="file-preview-card fade-in" style="aspect-ratio: 100 / {Math.min(aspectRatio, 75)};">
         {#if previewUrl}
           {#if file?.type.startsWith('video/')}
-            <video 
+            <video
               bind:this={previewVideo}
-              src={previewUrl} 
-              muted 
-              playsinline 
-              loop 
-              autoplay 
+              src={previewUrl}
+              muted
+              playsinline
+              loop
+              autoplay
               class="bg-video"
               onloadedmetadata={handleVideoLoaded}
             ></video>
           {:else if file?.type.startsWith('image/')}
-            <img 
-              src={previewUrl} 
+            <img
+              src={previewUrl}
               alt="Preview"
               class="bg-video"
               onload={handleImageLoaded}
@@ -610,13 +628,13 @@
           {/if}
           <div class="video-overlay"></div>
         {/if}
-        
+
         <div class="preview-content">
-          <button 
+          <button
             type="button"
-            class="file-icon" 
+            class="file-icon"
             class:clickable={!!previewUrl}
-            onclick={(e) => { e.preventDefault(); e.stopPropagation(); if (previewUrl) togglePreview(e); }}
+            onclick={(e) => { e.stopPropagation(); if (previewUrl) togglePreview(e); }}
             disabled={!previewUrl}
           >
             {#if previewUrl && file?.type.startsWith('video/')}
@@ -638,9 +656,10 @@
               <span class="file-size">{fileSize}</span>
             {/if}
           </div>
-          <button 
-            class="btn-clear" 
-            onclick={(e) => { e.preventDefault(); e.stopPropagation(); clearFile(); }}
+          <button
+            type="button"
+            class="btn-clear"
+            onclick={(e) => { e.stopPropagation(); clearFile(); }}
             aria-label="Cancel"
           >×</button>
         </div>
@@ -652,23 +671,24 @@
           <strong>Drag & Drop</strong> your video here
         </p>
         <p class="drop-subtext text-muted text-sm">or click to choose from your device</p>
-        
+
         <div class="divider">
           <span>OR</span>
         </div>
-        
-        <div class="url-input-wrapper" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="group">
+
+        <div class="url-input-wrapper">
           <span class="url-icon">🔗</span>
-          <input 
-            type="url" 
-            placeholder="Paste a direct video URL" 
+          <input
+            type="url"
+            placeholder="Paste a direct video URL"
             bind:value={url}
             onclick={(e) => e.stopPropagation()}
+            onkeydown={(e) => e.stopPropagation()}
           />
         </div>
       </div>
     {/if}
-  </label>
+  </div>
 
   <!-- Size Selector -->
   <div class="size-section">
@@ -831,17 +851,11 @@
   }
 
   .file-input-hidden {
-    position: absolute;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
-    pointer-events: none;
-  }
-
-  .file-input-hidden {
     position: fixed;
     top: -9999px;
     left: -9999px;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .drop-content {
