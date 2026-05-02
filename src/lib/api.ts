@@ -2,8 +2,10 @@ import { env } from '$env/dynamic/public';
 
 const RAW = (env.PUBLIC_API_URL as string | undefined) || 'https://dev-local.fits.video';
 const API = RAW && RAW.trim() !== '' ? RAW.replace(/\/$/, '') : '';
-const DEFAULT_API_AUTH_USER = (env.PUBLIC_API_AUTH_USER as string | undefined) || 'admin';
-const DEFAULT_API_AUTH_PASS = (env.PUBLIC_API_AUTH_PASS as string | undefined) || 'changeme';
+const AUTH_ENABLED =
+	((env.PUBLIC_API_AUTH_ENABLED as string | undefined) ?? '').trim().toLowerCase() === 'true';
+const DEFAULT_API_AUTH_USER = (env.PUBLIC_API_AUTH_USER as string | undefined) ?? '';
+const DEFAULT_API_AUTH_PASS = (env.PUBLIC_API_AUTH_PASS as string | undefined) ?? '';
 
 export interface ApiAuth {
 	user: string;
@@ -426,7 +428,8 @@ function filenameFromDisposition(disposition: string | null): string | null {
 	return plainMatch?.[1] ?? null;
 }
 
-export function getDefaultApiAuth(): ApiAuth {
+export function getDefaultApiAuth(): ApiAuth | null {
+	if (!AUTH_ENABLED) return null;
 	return {
 		user: DEFAULT_API_AUTH_USER,
 		pass: DEFAULT_API_AUTH_PASS

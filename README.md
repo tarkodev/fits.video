@@ -54,8 +54,14 @@ Backend client (inlined into the bundle at build time):
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://dev-local.fits.video` |
-| `PUBLIC_API_AUTH_USER` | Basic auth username used by the stock backend | `admin` |
-| `PUBLIC_API_AUTH_PASS` | Basic auth password used by the stock backend | `changeme` |
+| `PUBLIC_API_AUTH_ENABLED` | `true` to send a Basic Auth header. Off by default — keep it off if your backend is unauthenticated or sits behind a proxy that injects auth. | `false` |
+| `PUBLIC_API_AUTH_USER` | Basic auth username (only consumed when `PUBLIC_API_AUTH_ENABLED=true`) | `admin` |
+| `PUBLIC_API_AUTH_PASS` | Basic auth password (only consumed when `PUBLIC_API_AUTH_ENABLED=true`) | `changeme` |
+
+> ⚠️ When `PUBLIC_API_AUTH_ENABLED=true`, the user/pass are inlined into
+> the public JavaScript bundle and visible to anyone who loads the page.
+> Use it only for trusted internal deployments, never as the only line of
+> defence on a public-facing instance.
 
 Web server bind (consumed by `npm run dev` **and** the `docker compose`
 host port mapping):
