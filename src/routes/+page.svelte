@@ -429,7 +429,10 @@
       }
 
       const activeTaskId = taskId;
-      startJobStatusPolling(activeTaskId, serverFilename, auth, runToken);
+      // The polling loop is a *fallback* for when SSE dies (proxy timeout,
+      // network blip). It only spins up from `es.onerror` below — keeping
+      // SSE as the single source of truth on the happy path saves one
+      // GET /status per second per active job.
       const es = openProgressStream(activeTaskId);
       eventSource = es;
 
@@ -492,7 +495,7 @@
         if (eventSource !== es) return;
         es.close();
         eventSource = null;
-        void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
+        startJobStatusPolling(activeTaskId, serverFilename, auth, runToken);
       };
     } catch (err) {
       if (err instanceof Error && err.message === 'Upload cancelled') return;
