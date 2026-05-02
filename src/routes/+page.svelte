@@ -1,21 +1,7 @@
 <script lang="ts">
-  import {
-    cancelJob,
-    downloadCompletedFile,
-    getDefaultApiAuth,
-    getJobStatus,
-    openProgressStream,
-    parseStreamEvent,
-    startCompress,
-    uploadFile,
-    type ApiAuth
-  } from '$lib/api';
-  import {
-    buildDownloadFilename,
-    formatBytes,
-    formatEta,
-    isAcceptedFile
-  } from '$lib/format';
+  import { getDefaultApiAuth } from '$lib/api';
+  import { CompressionJob } from '$lib/compression.svelte';
+  import { formatBytes, isAcceptedFile } from '$lib/format';
   import EmptyDropZone from '$lib/components/EmptyDropZone.svelte';
   import FilePreview from '$lib/components/FilePreview.svelte';
   import ProgressDisplay from '$lib/components/ProgressDisplay.svelte';
@@ -33,204 +19,21 @@
   let isCustom = $state(false);
   const sizePresets = [8, 10, 25, 50, 100];
 
-  // --- Job state ------------------------------------------------------------
-  let taskId = $state<string | null>(null);
-  let status = $state<'idle' | 'uploading' | 'compressing' | 'done' | 'error'>('idle');
-  let errorMessage = $state('');
-  let uploadProgress = $state(0);
-  let compressProgress = $state(0);
-  let etaLabel = $state<string | null>(null);
-  let currentSpeedX = $state<number | null>(null);
-  let isFinalizing = $state(false);
-
-  let eventSource = $state<EventSource | null>(null);
-  let statusPollTimer = $state<number | null>(null);
-  let uploadAbort = $state<(() => void) | null>(null);
-  let activeRunToken = $state(0);
-  let finalizingRunToken = $state<number | null>(null);
-  let statusPollFailures = $state(0);
+  // The whole upload → compress → download lifecycle lives in this class
+  // so the page only owns "what file is selected" and "what size is asked".
+  const job = new CompressionJob();
 
   // --- Derived --------------------------------------------------------------
   let selectedSize = $derived(isCustom ? (parseFloat(customSize) || 8) : targetSize);
   let canCompress = $derived(
-    (file || url.trim()) && selectedSize > 0 && status === 'idle' && !(isCustom && !customSize.trim())
+    (file || url.trim()) && selectedSize > 0 && job.status === 'idle' && !(isCustom && !customSize.trim())
   );
   let fileName = $derived(file?.name || '');
   let fileSize = $derived(file ? formatBytes(file.size) : '');
-  // The progress bar relies on a CSS `transition: width` for smoothing,
-  // so the displayed value tracks the raw one one-to-one.
-  let displayedProgress = $derived(compressProgress);
-
-  // --- Helpers --------------------------------------------------------------
-  function getErrorMessage(err: unknown): string {
-    if (err instanceof Error && err.message) return err.message;
-    return 'Something went wrong';
-  }
-
-  function resetCompressionTelemetry() {
-    compressProgress = 0;
-    etaLabel = null;
-    currentSpeedX = null;
-    isFinalizing = false;
-  }
-
-  function updateCompressionTelemetry(
-    progress: number,
-    options: { phase?: string | null; etaSeconds?: number | null; speedX?: number | null } = {}
-  ) {
-    const bounded = Math.max(0, Math.min(100, progress));
-    compressProgress = bounded;
-
-    const phase = options.phase ?? null;
-    if (phase === 'finalizing') {
-      isFinalizing = true;
-      etaLabel = null;
-      currentSpeedX = null;
-    } else if (phase === 'encoding') {
-      isFinalizing = false;
-    }
-
-    if (!isFinalizing && typeof options.speedX === 'number' && Number.isFinite(options.speedX) && options.speedX > 0) {
-      currentSpeedX = options.speedX;
-    }
-
-    if (!isFinalizing && bounded < 99 && typeof options.etaSeconds === 'number' && Number.isFinite(options.etaSeconds) && options.etaSeconds > 0) {
-      etaLabel = formatEta(options.etaSeconds);
-    } else if (isFinalizing || bounded >= 99) {
-      etaLabel = null;
-    }
-  }
-
-  let compressionSummary = $derived.by(() => {
-    const parts: string[] = [];
-    if (finalizingRunToken !== null || isFinalizing || displayedProgress >= 99) {
-      parts.push('Almost fits the video!');
-    } else {
-      if (etaLabel) parts.push(`~${etaLabel}`);
-      if (currentSpeedX !== null) parts.push(`${currentSpeedX.toFixed(2)}x`);
-    }
-    parts.push(`${Math.ceil(displayedProgress)}%`);
-    return parts.join(' • ');
-  });
-
-  function closeProgressWatchers() {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-    if (statusPollTimer !== null) {
-      window.clearInterval(statusPollTimer);
-      statusPollTimer = null;
-    }
-  }
-
-  function failCompression(message: string, runToken: number) {
-    if (runToken !== activeRunToken) return;
-    closeProgressWatchers();
-    finalizingRunToken = null;
-    etaLabel = null;
-    currentSpeedX = null;
-    isFinalizing = false;
-    status = 'error';
-    errorMessage = message;
-  }
-
-  async function finalizeDownload(
-    completedTaskId: string,
-    suggestedFilename: string,
-    auth: ApiAuth | null,
-    runToken: number
-  ) {
-    if (runToken !== activeRunToken) return;
-    if (finalizingRunToken === runToken || status === 'done') return;
-
-    finalizingRunToken = runToken;
-    closeProgressWatchers();
-    compressProgress = 100;
-    etaLabel = null;
-    currentSpeedX = null;
-    isFinalizing = true;
-
-    try {
-      await downloadCompletedFile(completedTaskId, suggestedFilename, auth, 5);
-      if (runToken !== activeRunToken) return;
-      status = 'done';
-    } catch (err) {
-      if (runToken !== activeRunToken) return;
-      status = 'error';
-      errorMessage = getErrorMessage(err);
-    } finally {
-      if (finalizingRunToken === runToken) {
-        finalizingRunToken = null;
-      }
-    }
-  }
-
-  async function syncJobStatus(
-    activeTaskId: string,
-    serverFilename: string,
-    auth: ApiAuth | null,
-    runToken: number
-  ) {
-    if (runToken !== activeRunToken || status !== 'compressing') return;
-
-    try {
-      const jobStatus = await getJobStatus(activeTaskId, auth);
-      if (runToken !== activeRunToken || status !== 'compressing') return;
-
-      statusPollFailures = 0;
-
-      if (typeof jobStatus.progress === 'number') {
-        updateCompressionTelemetry(jobStatus.progress);
-      }
-
-      const state = String(jobStatus.state || '').toUpperCase();
-      const detail = String(jobStatus.detail || '').toLowerCase();
-
-      if (state === 'SUCCESS' || detail === 'done') {
-        updateCompressionTelemetry(100, { phase: 'done' });
-        const suggested = buildDownloadFilename(file?.name || serverFilename);
-        await finalizeDownload(activeTaskId, suggested, auth, runToken);
-        return;
-      }
-
-      if (state === 'FAILURE') {
-        failCompression(jobStatus.detail || 'Compression failed', runToken);
-        return;
-      }
-
-      if (state === 'REVOKED') {
-        failCompression('Compression cancelled', runToken);
-      }
-    } catch {
-      if (runToken !== activeRunToken || status !== 'compressing') return;
-      statusPollFailures += 1;
-
-      if (!eventSource && statusPollFailures >= 3) {
-        failCompression('Connection lost', runToken);
-      }
-    }
-  }
-
-  function startJobStatusPolling(
-    activeTaskId: string,
-    serverFilename: string,
-    auth: ApiAuth | null,
-    runToken: number
-  ) {
-    if (statusPollTimer !== null) {
-      window.clearInterval(statusPollTimer);
-    }
-    statusPollFailures = 0;
-    void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-    statusPollTimer = window.setInterval(() => {
-      void syncJobStatus(activeTaskId, serverFilename, auth, runToken);
-    }, 1000);
-  }
 
   // --- File input handling --------------------------------------------------
   function canOpenFilePicker(): boolean {
-    return status === 'idle' || status === 'done' || status === 'error';
+    return job.status === 'idle' || job.status === 'done' || job.status === 'error';
   }
 
   function openFilePicker() {
@@ -247,17 +50,12 @@
 
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
-    if (status !== 'idle' && status !== 'error' && status !== 'done') return;
+    if (!canOpenFilePicker()) return;
     isDragging = true;
   }
 
   function handleDragLeave() {
     isDragging = false;
-  }
-
-  function rejectUnsupportedFile() {
-    status = 'error';
-    errorMessage = 'Unsupported file type. Drop a video or a GIF.';
   }
 
   function handleDrop(e: DragEvent) {
@@ -267,7 +65,7 @@
     const dropped = e.dataTransfer?.files?.[0];
     if (!dropped) return;
     if (!isAcceptedFile(dropped)) {
-      rejectUnsupportedFile();
+      job.showError('Unsupported file type. Drop a video or a GIF.');
       return;
     }
     setFile(dropped);
@@ -280,36 +78,14 @@
     input.value = '';
     if (!picked) return;
     if (!isAcceptedFile(picked)) {
-      rejectUnsupportedFile();
+      job.showError('Unsupported file type. Drop a video or a GIF.');
       return;
     }
     setFile(picked);
   }
 
-  // Brings the job state machine back to 'idle' without touching the user's
-  // size preferences. Used both when picking a new file mid-`done`/`error`
-  // and when explicitly clearing the current selection.
-  function resetJobState() {
-    activeRunToken += 1;
-    finalizingRunToken = null;
-    statusPollFailures = 0;
-    resetCompressionTelemetry();
-    if (uploadAbort) {
-      uploadAbort();
-      uploadAbort = null;
-    }
-    status = 'idle';
-    uploadProgress = 0;
-    errorMessage = '';
-    if (taskId) {
-      cancelJob(taskId, getDefaultApiAuth()).catch(() => {});
-      taskId = null;
-    }
-    closeProgressWatchers();
-  }
-
   function setFile(f: File) {
-    resetJobState();
+    job.reset();
     file = f;
     url = '';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -333,7 +109,7 @@
 
   function clearFile(e?: MouseEvent) {
     e?.stopPropagation();
-    resetJobState();
+    job.reset();
     file = null;
     url = '';
     // Size preference (preset / custom) is intentionally kept across
@@ -344,149 +120,17 @@
     }
   }
 
-  // --- Compression flow -----------------------------------------------------
   async function compress() {
     if (!canCompress) return;
-
-    const runToken = activeRunToken + 1;
-    activeRunToken = runToken;
-    finalizingRunToken = null;
-    statusPollFailures = 0;
-    resetCompressionTelemetry();
-    const auth = getDefaultApiAuth();
-
-    try {
-      status = 'uploading';
-      uploadProgress = 0;
-      resetCompressionTelemetry();
-      errorMessage = '';
-
-      let jobId: string | undefined;
-      let serverFilename: string = '';
-      if (file) {
-        // 5% safety margin to absorb MB/MiB rounding on the backend.
-        const safeSize = selectedSize * 0.95;
-        const { promise, abort } = uploadFile(
-          file,
-          safeSize,
-          128,
-          (pct) => {
-            if (runToken !== activeRunToken) return;
-            uploadProgress = pct;
-          },
-          auth
-        );
-        uploadAbort = abort;
-        const uploadResp = await promise;
-        if (runToken !== activeRunToken) return;
-        uploadAbort = null;
-        jobId = uploadResp.job_id;
-        serverFilename = uploadResp.filename || file.name;
-      } else if (url.trim()) {
-        errorMessage = 'URL upload not yet supported';
-        status = 'error';
-        return;
-      }
-
-      if (!jobId) {
-        status = 'error';
-        errorMessage = 'Upload failed - no job ID';
-        return;
-      }
-
-      status = 'compressing';
-
-      const compressResp = await startCompress({
-        job_id: jobId,
-        filename: serverFilename,
-        target_size_mb: selectedSize,
-        audio_bitrate_kbps: 128,
-        video_codec: 'libx264'
-      }, auth);
-      if (runToken !== activeRunToken) return;
-
-      taskId = compressResp.task_id;
-
-      if (!taskId) {
-        status = 'error';
-        errorMessage = 'Compression failed to start';
-        return;
-      }
-
-      const activeTaskId = taskId;
-      // The polling loop is a *fallback* for when SSE dies (proxy timeout,
-      // network blip). It only spins up from `es.onerror` below — keeping
-      // SSE as the single source of truth on the happy path saves one
-      // GET /status per second per active job.
-      const es = openProgressStream(activeTaskId);
-      eventSource = es;
-
-      es.onmessage = (event) => {
-        if (runToken !== activeRunToken) return;
-
-        const data = parseStreamEvent(event.data);
-        if (!data) return;
-
-        statusPollFailures = 0;
-
-        if (data.type === 'ping' || data.type === 'connected') return;
-
-        if (data.type === 'progress') {
-          updateCompressionTelemetry(data.progress, {
-            phase: data.phase ?? null,
-            etaSeconds: data.eta_seconds ?? null,
-            speedX: data.speed_x ?? null
-          });
-
-          if (data.phase === 'done' || data.progress >= 100) {
-            const suggested = buildDownloadFilename(file?.name || serverFilename);
-            void finalizeDownload(activeTaskId, suggested, auth, runToken);
-          }
-          return;
-        }
-
-        if (data.type === 'log') return;
-
-        if (data.type === 'retry') {
-          compressProgress = 1;
-          isFinalizing = false;
-          etaLabel = null;
-          currentSpeedX = null;
-          return;
-        }
-
-        if (data.type === 'canceled') {
-          failCompression('Compression cancelled', runToken);
-          return;
-        }
-
-        if (data.type === 'done') {
-          updateCompressionTelemetry(100, { phase: 'done' });
-          const suggested = buildDownloadFilename(file?.name || serverFilename);
-          void finalizeDownload(activeTaskId, suggested, auth, runToken);
-          return;
-        }
-
-        if (data.type === 'error') {
-          status = 'error';
-          errorMessage = data.message || 'Compression failed';
-          es.close();
-          eventSource = null;
-        }
-      };
-
-      es.onerror = () => {
-        if (eventSource !== es) return;
-        es.close();
-        eventSource = null;
-        startJobStatusPolling(activeTaskId, serverFilename, auth, runToken);
-      };
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Upload cancelled') return;
-      if (runToken !== activeRunToken) return;
-      status = 'error';
-      errorMessage = getErrorMessage(err);
+    if (!file) {
+      if (url.trim()) job.showError('URL upload not yet supported');
+      return;
     }
+    await job.start({
+      file,
+      targetSizeMb: selectedSize,
+      auth: getDefaultApiAuth()
+    });
   }
 </script>
 
@@ -508,7 +152,7 @@
     class="drop-zone card"
     class:dragging={isDragging}
     class:has-file={!!file}
-    class:processing={status === 'uploading' || status === 'compressing'}
+    class:processing={job.status === 'uploading' || job.status === 'compressing'}
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
@@ -539,24 +183,24 @@
     {targetSize}
     {customSize}
     {isCustom}
-    disabled={status !== 'idle'}
+    disabled={job.status !== 'idle'}
     onSelectPreset={(size) => { targetSize = size; isCustom = false; customSize = ''; }}
     onEnableCustom={() => (isCustom = true)}
     onCustomSizeChange={(v) => (customSize = v)}
   />
 
-  {#if status !== 'idle'}
+  {#if job.status !== 'idle'}
     <ProgressDisplay
-      {status}
-      {uploadProgress}
-      {compressionSummary}
-      {displayedProgress}
-      {errorMessage}
-      onDismiss={() => { status = 'idle'; errorMessage = ''; }}
+      status={job.status}
+      uploadProgress={job.uploadProgress}
+      compressionSummary={job.compressionSummary}
+      displayedProgress={job.displayedProgress}
+      errorMessage={job.errorMessage}
+      onDismiss={() => job.dismissError()}
     />
   {/if}
 
-  {#if status === 'idle'}
+  {#if job.status === 'idle'}
     <div class="action-section">
       <button
         class="btn-primary compress-btn"
