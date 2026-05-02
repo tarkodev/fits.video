@@ -77,13 +77,6 @@ Vite dev server:
 |----------|-------------|---------|
 | `DEV_ALLOWED_HOSTS` | Comma-separated extra hostnames (loopback always works), or `*` to allow any | `*` (open) / `dev.fits.video` (restricted) |
 
-Docker Compose (only used by `docker compose`; ignored by Vite):
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `DOCKER_IMAGE_NAME` | Local image name/tag produced by `build` | `fitsvideo-dev-front` |
-| `DOCKER_CONTAINER_NAME` | Name of the running container on the host | `fitsvideo-dev-front` |
-
 ## 🛠️ Tech Stack
 
 - **[SvelteKit 2](https://kit.svelte.dev/)** - Full-stack web framework
@@ -109,7 +102,7 @@ A multi-stage `Dockerfile` is provided so `docker compose up` is the only
 command you need (no manual `npm run build` first):
 
 ```bash
-# Builds the image once, then runs it using DOCKER_* names and WEB_PORT from .env.
+# Builds the image once, then runs it on the host port set by WEB_PORT in .env.
 docker compose up -d --build
 ```
 
