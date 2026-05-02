@@ -301,7 +301,30 @@
     setFile(picked);
   }
 
+  // Brings the job state machine back to 'idle' without touching the user's
+  // size preferences. Used both when picking a new file mid-`done`/`error`
+  // and when explicitly clearing the current selection.
+  function resetJobState() {
+    activeRunToken += 1;
+    finalizingRunToken = null;
+    statusPollFailures = 0;
+    resetCompressionTelemetry();
+    if (uploadAbort) {
+      uploadAbort();
+      uploadAbort = null;
+    }
+    status = 'idle';
+    uploadProgress = 0;
+    errorMessage = '';
+    if (taskId) {
+      cancelJob(taskId, getDefaultApiAuth()).catch(() => {});
+      taskId = null;
+    }
+    closeProgressWatchers();
+  }
+
   function setFile(f: File) {
+    resetJobState();
     file = f;
     url = '';
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -325,28 +348,12 @@
 
   function clearFile(e?: MouseEvent) {
     e?.stopPropagation();
-    activeRunToken += 1;
-    finalizingRunToken = null;
-    statusPollFailures = 0;
-    resetCompressionTelemetry();
-    if (uploadAbort) {
-      uploadAbort();
-      uploadAbort = null;
-    }
+    resetJobState();
     file = null;
     url = '';
     customSize = '';
     isCustom = false;
     targetSize = 10;
-    status = 'idle';
-    uploadProgress = 0;
-    resetCompressionTelemetry();
-    errorMessage = '';
-    if (taskId) {
-      cancelJob(taskId, getDefaultApiAuth()).catch(() => {});
-      taskId = null;
-    }
-    closeProgressWatchers();
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = null;
