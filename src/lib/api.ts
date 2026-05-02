@@ -1,11 +1,30 @@
+import {
+	PUBLIC_API_AUTH_ENABLED,
+	PUBLIC_API_URL
+} from '$env/static/public';
 import { env } from '$env/dynamic/public';
 
-const RAW = (env.PUBLIC_API_URL as string | undefined) || 'https://dev-local.fits.video';
-const API = RAW && RAW.trim() !== '' ? RAW.replace(/\/$/, '') : '';
-const AUTH_ENABLED =
-	((env.PUBLIC_API_AUTH_ENABLED as string | undefined) ?? '').trim().toLowerCase() === 'true';
-const DEFAULT_API_AUTH_USER = (env.PUBLIC_API_AUTH_USER as string | undefined) ?? '';
-const DEFAULT_API_AUTH_PASS = (env.PUBLIC_API_AUTH_PASS as string | undefined) ?? '';
+function requiredPublicEnv(name: string, value: string): string {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		throw new Error(`Missing required public env var ${name}`);
+	}
+	return trimmed;
+}
+
+const API = requiredPublicEnv('PUBLIC_API_URL', PUBLIC_API_URL).replace(/\/$/, '');
+const AUTH_ENABLED_RAW = requiredPublicEnv('PUBLIC_API_AUTH_ENABLED', PUBLIC_API_AUTH_ENABLED)
+	.toLowerCase();
+if (AUTH_ENABLED_RAW !== 'true' && AUTH_ENABLED_RAW !== 'false') {
+	throw new Error('PUBLIC_API_AUTH_ENABLED must be "true" or "false"');
+}
+const AUTH_ENABLED = AUTH_ENABLED_RAW === 'true';
+const DEFAULT_API_AUTH_USER = AUTH_ENABLED
+	? requiredPublicEnv('PUBLIC_API_AUTH_USER', env.PUBLIC_API_AUTH_USER ?? '')
+	: '';
+const DEFAULT_API_AUTH_PASS = AUTH_ENABLED
+	? requiredPublicEnv('PUBLIC_API_AUTH_PASS', env.PUBLIC_API_AUTH_PASS ?? '')
+	: '';
 
 export interface ApiAuth {
 	user: string;

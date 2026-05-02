@@ -305,8 +305,8 @@
   }
 
   .compress-btn {
-    width: 100%;
-    max-width: 400px;
+    width: fit-content;
+    max-width: 100%;
     padding: 16px 32px;
     font-size: 1rem;
     font-weight: 700;
