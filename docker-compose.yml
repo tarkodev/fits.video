@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: fitsvideo-dev-front
-    container_name: fitsvideo-dev-front
+    image: "${DOCKER_IMAGE_NAME:?}"
+    container_name: "${DOCKER_CONTAINER_NAME:?}"
     ports:
       - "${WEB_PORT:?}:80"
     restart: unless-stopped
