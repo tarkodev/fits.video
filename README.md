@@ -46,9 +46,8 @@ With the stock `.env`, the app listens on `http://localhost:8002`.
 
 ### Environment Variables
 
-All variables in `.env.example` are required (with the exception of the
-`DEV_HMR_*` triplet, which is opt-in for proxied dev). The dev server
-and `vite build` will refuse to start if any required value is missing.
+All variables in `.env.example` are required. The dev server and
+`vite build` will refuse to start if any of them is missing.
 
 Backend client (inlined into the bundle at build time):
 
@@ -71,15 +70,6 @@ Vite dev server:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `DEV_ALLOWED_HOSTS` | Comma-separated extra hostnames (loopback always works), or `*` to allow any | `*` (open) / `dev.fits.video` (restricted) |
-
-HMR over a TLS-terminating reverse proxy (optional — leave commented if
-you run on plain `localhost`):
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `DEV_HMR_HOST` | Public hostname the browser uses for HMR | `dev.fits.video` |
-| `DEV_HMR_PROTOCOL` | `ws` or `wss` for the HMR socket | `wss` |
-| `DEV_HMR_CLIENT_PORT` | Public port the browser uses for HMR | `443` |
 
 ## 🛠️ Tech Stack
 

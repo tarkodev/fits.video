@@ -28,27 +28,12 @@ export default defineConfig(({ mode }) => {
 			? true
 			: allowedHostsRaw.split(',').map((s) => s.trim()).filter(Boolean);
 
-	const hmrHost = env.DEV_HMR_HOST?.trim();
-	const hmrProtocol = env.DEV_HMR_PROTOCOL?.trim() as 'ws' | 'wss' | undefined;
-	const hmrClientPort = env.DEV_HMR_CLIENT_PORT
-		? Number(env.DEV_HMR_CLIENT_PORT)
-		: undefined;
-
 	return {
 		plugins: [sveltekit()],
 		server: {
 			host,
 			port,
-			allowedHosts,
-			...(hmrHost
-				? {
-						hmr: {
-							host: hmrHost,
-							protocol: hmrProtocol,
-							clientPort: hmrClientPort
-						}
-					}
-				: {})
+			allowedHosts
 		}
 	};
 });
