@@ -8,7 +8,10 @@ const config = {
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',
-			fallback: 'index.html',
+			// Use a name other than index.html so the prerendered `/` page is
+			// not overwritten by the SPA shell (silences adapter-static warning).
+			// Nginx still uses index.html for `/` and try_files below.
+			fallback: '200.html',
 			precompress: false,
 			strict: true
 		}),
