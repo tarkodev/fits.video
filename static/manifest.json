@@ -4,7 +4,7 @@
   "description": "MP4, GIF, whatever: now it fits. Free video compression tool.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "any",
+  "orientation": "natural",
   "theme_color": "#000000",
   "background_color": "#000000",
   "icons": [
