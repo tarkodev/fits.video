@@ -17,7 +17,7 @@
   let targetSize = $state(10);
   let customSize = $state('');
   let isCustom = $state(false);
-  const sizePresets = [8, 10, 25, 50, 100];
+  const sizePresets = [8, 10, 20, 50, 100];
 
   // The whole upload → compress → download lifecycle lives in this class
   // so the page only owns "what file is selected" and "what size is asked".

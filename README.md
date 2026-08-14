@@ -10,7 +10,7 @@ A modern, free video compression web app. Compress your videos to a specific fil
 
 ## ✨ Features
 
-- **🎯 Target Size Compression** - Compress videos to your desired file size (8MB, 10MB, 25MB, etc.)
+- **🎯 Target Size Compression** - Compress videos to your desired file size (8MB, 10MB, 20MB, etc.)
 - **📱 PWA Support** - Install as a native app on any device
 - **🎬 Live Preview** - Preview your video before compression
 - **📤 Drag & Drop** - Simply drag your video into the browser
