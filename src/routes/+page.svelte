@@ -14,7 +14,7 @@
   let aspectRatio = $state(56.25); // Default 16:9 expressed as height/width %.
   let isDragging = $state(false);
 
-  let targetSize = $state(10);
+  let targetSize = $state(20);
   let customSize = $state('');
   let isCustom = $state(false);
   const sizePresets = [8, 10, 20, 50, 100];
