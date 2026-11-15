@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { getDefaultApiAuth } from '$lib/api';
   import { CompressionJob } from '$lib/compression.svelte';
   import { formatBytes, isAcceptedFile } from '$lib/format';
   import EmptyDropZone from '$lib/components/EmptyDropZone.svelte';
@@ -128,8 +127,7 @@
     }
     await job.start({
       file,
-      targetSizeMb: selectedSize,
-      auth: getDefaultApiAuth()
+      targetSizeMb: selectedSize
     });
   }
 </script>

@@ -32,36 +32,33 @@ git clone https://github.com/tarkodev/fits.video.git
 cd fits.video
 
 # Install dependencies
-npm install
+npm ci
 
 # Configure environment (required, no defaults baked into the code)
 cp .env.example .env
-# Edit .env to point to your 8mb.local backend and tweak the bind/port
+# Set a free frontend port. Configure the private backend in .gateway.env.
 
 # Start development server
 npm run dev
 ```
 
-With the stock `.env`, the app listens on `http://localhost:8002`.
+The example uses port 8080. The deployed dev environment keeps its existing port 8004. Do not start Vite on a port already used by Docker. `npm run dev` serves the frontend only; use the Compose stack for the same-origin gateway and HTTPS cookie flow.
 
 ### Environment Variables
 
 All variables in `.env.example` are required. The dev server and
 `vite build` will refuse to start if any of them is missing.
 
-Backend client (inlined into the bundle at build time):
+Public gateway base (inlined into the static frontend at build time):
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `PUBLIC_API_URL` | URL of the 8mb.local backend | `https://dev-local.fits.video` |
-| `PUBLIC_API_AUTH_ENABLED` | `true` to send a Basic Auth header. Off by default — keep it off if your backend is unauthenticated or sits behind a proxy that injects auth. | `false` |
-| `PUBLIC_API_AUTH_USER` | Basic auth username (only consumed when `PUBLIC_API_AUTH_ENABLED=true`) | `admin` |
-| `PUBLIC_API_AUTH_PASS` | Basic auth password (only consumed when `PUBLIC_API_AUTH_ENABLED=true`) | `changeme` |
+| `PUBLIC_API_URL` | Base of the gateway; `/` calls `/api/*` on the same origin | `/` |
 
-> ⚠️ When `PUBLIC_API_AUTH_ENABLED=true`, the user/pass are inlined into
-> the public JavaScript bundle and visible to anyone who loads the page.
-> Use it only for trusted internal deployments, never as the only line of
-> defence on a public-facing instance.
+The browser uses an anonymous, secure session cookie. Backend credentials must
+never be configured in `PUBLIC_*` variables. Older `PUBLIC_API_AUTH_*` values
+must be removed from the frontend environment when switching to this gateway.
+Store any required upstream Basic credentials only in the gateway environment.
 
 Web server bind (consumed by `npm run dev` **and** the `docker compose`
 host port mapping):
@@ -69,7 +66,7 @@ host port mapping):
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `WEB_HOST` | Bind address for the dev server | `0.0.0.0` |
-| `WEB_PORT` | Port `vite dev` listens on, and the host-side port for the docker container | `8002` |
+| `WEB_PORT` | Port `vite dev` listens on, and the host-side port for the docker container | `8080` |
 
 Vite dev server:
 
@@ -98,36 +95,41 @@ The output will be in the `build/` directory, ready to be served by any static f
 
 ### Docker Deployment
 
-A multi-stage `Dockerfile` is provided so `docker compose up` is the only
-command you need (no manual `npm run build` first):
-
-```bash
-# Builds the image once, then runs it on the host port set by WEB_PORT in .env.
-docker compose up -d --build
-```
-
-The first run takes ~1 minute (npm ci + Vite build). Subsequent
-`docker compose up -d` calls reuse the cached image and start instantly.
-Use `docker compose up -d --build` whenever you change the source code; the
-Docker layer cache will skip `npm ci` as long as `package*.json` haven't
-moved.
-
-If you want to point the build at a different backend, drop a `.env` next
-to the `Dockerfile` (it's gitignored) before building — SvelteKit inlines
-the `PUBLIC_*` values at build time:
+The repository contains two independent services: the static Nginx frontend and
+the TypeScript gateway in `gateway/`. 8mb.local remains a separate deployment.
+See [gateway configuration and security](gateway/README.md) for the complete
+route allowlist, ownership rules, persistence and limits.
 
 ```bash
 cp .env.example .env
-# edit .env
-docker compose up -d --build
+cp gateway/.env.example .gateway.env
+# Configure GATEWAY_PUBLIC_ORIGIN and the private GATEWAY_UPSTREAM_URL.
+# Set FITS_BACKEND_NETWORK in .env to the private 8mb.local Docker network.
+docker compose config --quiet
+docker compose up -d --build web gateway
+docker compose ps
 ```
 
-The `.env` is read inside the builder stage only and never lands in the
-final nginx image (only `/app/build` is copied across).
+Only the gateway joins the configured backend network. For multiple stacks on
+the same host, set a distinct FITS_GATEWAY_SUBNET, FITS_GATEWAY_PROXY_IP and
+FITS_GATEWAY_SERVICE_IP per stack.
+The gateway has no published host port. Its SQLite state is stored in the
+`gateway_state` named volume and must be backed up with the deployment.
+
+Nginx relays `/api/*` without buffering uploads, downloads or SSE. Other paths
+serve the existing static build. Deploy behind HTTPS: the anonymous cookie is
+`Secure`, `HttpOnly`, `SameSite=Strict` and scoped to the public frontend host.
+The direct 8mb.local admin hostname must be protected independently with Exoti
+login, and direct backend ports must be filtered against bypasses.
+
+The frontend Docker build receives only explicit public build arguments. Private
+`.env` / `.gateway.env` files and gateway source/state are excluded from that
+build context. All upstream access and optional credentials stay server-side.
 
 ## 🔧 Backend
 
-This is a frontend-only project. It requires the [8mb.local](https://github.com/JMS1717/8mb.local) backend for video processing.
+The frontend stays static. Its gateway requires the separate
+[8mb.local](https://github.com/JMS1717/8mb.local) backend for video processing.
 
 The backend handles:
 - Video upload and storage
@@ -143,7 +145,7 @@ fits.video/
 │   ├── app.css                       # Global styles
 │   ├── app.html                      # HTML template
 │   ├── lib/
-│   │   ├── api.ts                    # HTTP / SSE client for 8mb.local
+│   │   ├── api.ts                    # HTTP / SSE client for the public gateway
 │   │   ├── compression.svelte.ts     # Upload → compress → download state machine
 │   │   ├── format.ts                 # Pure formatting & validation helpers
 │   │   └── components/
@@ -158,6 +160,7 @@ fits.video/
 ├── static/
 │   ├── manifest.json                 # PWA manifest
 │   └── icons/                        # App icons
+├── gateway/                          # Private TypeScript gateway and ownership state
 ├── Dockerfile                        # Multi-stage image (builder + nginx)
 ├── docker-compose.yml                # Docker setup
 ├── nginx.conf                        # Nginx config (static + security headers)

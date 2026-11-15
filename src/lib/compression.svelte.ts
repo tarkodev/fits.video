@@ -5,8 +5,7 @@ import {
 	openProgressStream,
 	parseStreamEvent,
 	startCompress,
-	uploadFile,
-	type ApiAuth
+	uploadFile
 } from './api';
 import { buildDownloadFilename, formatEta } from './format';
 
@@ -17,7 +16,6 @@ export interface StartOptions {
 	targetSizeMb: number;
 	audioBitrateKbps?: number;
 	videoCodec?: string;
-	auth?: ApiAuth | null;
 }
 
 interface TelemetryUpdate {
@@ -64,10 +62,8 @@ export class CompressionJob {
 	private activeRunToken = 0;
 	private finalizingRunToken = $state<number | null>(null);
 	private statusPollFailures = 0;
-	private currentAuth: ApiAuth | null = null;
 
 	async start(opts: StartOptions): Promise<void> {
-		const auth = opts.auth ?? null;
 		const audioKbps = opts.audioBitrateKbps ?? 128;
 		const codec = opts.videoCodec ?? 'libx264';
 
@@ -75,7 +71,6 @@ export class CompressionJob {
 		this.finalizingRunToken = null;
 		this.statusPollFailures = 0;
 		this.resetTelemetry();
-		this.currentAuth = auth;
 
 		try {
 			this.status = 'uploading';
@@ -91,8 +86,7 @@ export class CompressionJob {
 				(pct) => {
 					if (runToken !== this.activeRunToken) return;
 					this.uploadProgress = pct;
-				},
-				auth
+				}
 			);
 			this.uploadAbort = abort;
 			const uploadResp = await promise;
@@ -116,8 +110,7 @@ export class CompressionJob {
 					target_size_mb: opts.targetSizeMb,
 					audio_bitrate_kbps: audioKbps,
 					video_codec: codec
-				},
-				auth
+				}
 			);
 			if (runToken !== this.activeRunToken) return;
 
@@ -154,7 +147,7 @@ export class CompressionJob {
 							speedX: data.speed_x ?? null
 						});
 						if (data.phase === 'done' || data.progress >= 100) {
-							void this.finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+							void this.finalizeDownload(activeTaskId, suggestedFilename, runToken);
 						}
 						return;
 					case 'retry':
@@ -168,7 +161,7 @@ export class CompressionJob {
 						return;
 					case 'done':
 						this.updateTelemetry(100, { phase: 'done' });
-						void this.finalizeDownload(activeTaskId, suggestedFilename, auth, runToken);
+						void this.finalizeDownload(activeTaskId, suggestedFilename, runToken);
 						return;
 					case 'error':
 						this.status = 'error';
@@ -183,7 +176,7 @@ export class CompressionJob {
 				if (this.eventSource !== es) return;
 				es.close();
 				this.eventSource = null;
-				this.startStatusPolling(activeTaskId, serverFilename, auth, runToken);
+				this.startStatusPolling(activeTaskId, serverFilename, runToken);
 			};
 		} catch (err) {
 			if (err instanceof Error && err.message === 'Upload cancelled') return;
@@ -211,7 +204,7 @@ export class CompressionJob {
 		this.uploadProgress = 0;
 		this.errorMessage = '';
 		if (this.taskId) {
-			cancelJob(this.taskId, this.currentAuth).catch(() => {});
+			cancelJob(this.taskId).catch(() => {});
 			this.taskId = null;
 		}
 		this.closeProgressWatchers();
@@ -302,7 +295,6 @@ export class CompressionJob {
 	private async finalizeDownload(
 		completedTaskId: string,
 		suggestedFilename: string,
-		auth: ApiAuth | null,
 		runToken: number
 	): Promise<void> {
 		if (runToken !== this.activeRunToken) return;
@@ -316,7 +308,7 @@ export class CompressionJob {
 		this.isFinalizing = true;
 
 		try {
-			await downloadCompletedFile(completedTaskId, suggestedFilename, auth, 5);
+			await downloadCompletedFile(completedTaskId, suggestedFilename, 5);
 			if (runToken !== this.activeRunToken) return;
 			this.status = 'done';
 		} catch (err) {
@@ -333,13 +325,12 @@ export class CompressionJob {
 	private async syncStatus(
 		activeTaskId: string,
 		serverFilename: string,
-		auth: ApiAuth | null,
 		runToken: number
 	): Promise<void> {
 		if (runToken !== this.activeRunToken || this.status !== 'compressing') return;
 
 		try {
-			const jobStatus = await getJobStatus(activeTaskId, auth);
+			const jobStatus = await getJobStatus(activeTaskId);
 			if (runToken !== this.activeRunToken || this.status !== 'compressing') return;
 
 			this.statusPollFailures = 0;
@@ -354,7 +345,7 @@ export class CompressionJob {
 			if (state === 'SUCCESS' || detail === 'done') {
 				this.updateTelemetry(100, { phase: 'done' });
 				const suggested = buildDownloadFilename(serverFilename);
-				await this.finalizeDownload(activeTaskId, suggested, auth, runToken);
+				await this.finalizeDownload(activeTaskId, suggested, runToken);
 				return;
 			}
 
@@ -378,16 +369,15 @@ export class CompressionJob {
 	private startStatusPolling(
 		activeTaskId: string,
 		serverFilename: string,
-		auth: ApiAuth | null,
 		runToken: number
 	): void {
 		if (this.statusPollTimer !== null) {
 			window.clearInterval(this.statusPollTimer);
 		}
 		this.statusPollFailures = 0;
-		void this.syncStatus(activeTaskId, serverFilename, auth, runToken);
+		void this.syncStatus(activeTaskId, serverFilename, runToken);
 		this.statusPollTimer = window.setInterval(() => {
-			void this.syncStatus(activeTaskId, serverFilename, auth, runToken);
+			void this.syncStatus(activeTaskId, serverFilename, runToken);
 		}, 1000);
 	}
 }

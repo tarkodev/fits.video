@@ -1,5 +1,11 @@
 # Build artefacts and dev caches
 node_modules
+gateway
+.gateway.env
+.gateway.env.*
+.env
+.env.*
+!.env.example
 .svelte-kit
 build
 
@@ -21,6 +27,5 @@ Dockerfile
 # Logs
 *.log
 
-# Note: .env IS intentionally NOT excluded so SvelteKit can inline
-# PUBLIC_* values during `npm run build`. The .env never ships in the
-# final image because stage 2 only copies /app/build.
+# Frontend build configuration is passed explicitly as build arguments.
+# Private environment files and gateway state never enter the build context.

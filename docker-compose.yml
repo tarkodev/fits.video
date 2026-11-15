@@ -3,8 +3,56 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: fitsvideo-front
-    container_name: fitsvideo-front
+      args:
+        PUBLIC_API_URL: ${PUBLIC_API_URL:?}
+        WEB_HOST: ${WEB_HOST:?}
+        WEB_PORT: ${WEB_PORT:?}
+        DEV_ALLOWED_HOSTS: ${DEV_ALLOWED_HOSTS:?}
     ports:
-      - "${WEB_PORT:?}:80"
+    - ${WEB_PORT:?}:80
     restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      gateway_front:
+        ipv4_address: ${FITS_GATEWAY_PROXY_IP:-172.30.241.2}
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    env_file: .gateway.env
+    environment:
+      GATEWAY_PORT: "3000"
+      GATEWAY_STATE_PATH: /state/gateway.sqlite
+      GATEWAY_TRUST_PROXY: ${FITS_GATEWAY_PROXY_IP:-172.30.241.2}/32
+    volumes:
+      - gateway_state:/state
+    networks:
+      gateway_front:
+        ipv4_address: ${FITS_GATEWAY_SERVICE_IP:-172.30.241.3}
+      backend: {}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+
+networks:
+  gateway_front:
+    ipam:
+      config:
+        - subnet: ${FITS_GATEWAY_SUBNET:-172.30.241.0/28}
+  backend:
+    external: true
+    name: ${FITS_BACKEND_NETWORK:?Set FITS_BACKEND_NETWORK to the existing private 8mb.local Docker network}
+
+volumes:
+  gateway_state:

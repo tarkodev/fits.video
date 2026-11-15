@@ -1,8 +1,4 @@
-import {
-	PUBLIC_API_AUTH_ENABLED,
-	PUBLIC_API_URL
-} from '$env/static/public';
-import { env } from '$env/dynamic/public';
+import { PUBLIC_API_URL } from '$env/static/public';
 
 function requiredPublicEnv(name: string, value: string): string {
 	const trimmed = value.trim();
@@ -13,23 +9,6 @@ function requiredPublicEnv(name: string, value: string): string {
 }
 
 const API = requiredPublicEnv('PUBLIC_API_URL', PUBLIC_API_URL).replace(/\/$/, '');
-const AUTH_ENABLED_RAW = requiredPublicEnv('PUBLIC_API_AUTH_ENABLED', PUBLIC_API_AUTH_ENABLED)
-	.toLowerCase();
-if (AUTH_ENABLED_RAW !== 'true' && AUTH_ENABLED_RAW !== 'false') {
-	throw new Error('PUBLIC_API_AUTH_ENABLED must be "true" or "false"');
-}
-const AUTH_ENABLED = AUTH_ENABLED_RAW === 'true';
-const DEFAULT_API_AUTH_USER = AUTH_ENABLED
-	? requiredPublicEnv('PUBLIC_API_AUTH_USER', env.PUBLIC_API_AUTH_USER ?? '')
-	: '';
-const DEFAULT_API_AUTH_PASS = AUTH_ENABLED
-	? requiredPublicEnv('PUBLIC_API_AUTH_PASS', env.PUBLIC_API_AUTH_PASS ?? '')
-	: '';
-
-export interface ApiAuth {
-	user: string;
-	pass: string;
-}
 
 export type ProgressPhase = 'encoding' | 'finalizing' | 'done';
 
@@ -78,25 +57,9 @@ function toApiUrl(path: string): string {
 	return API ? `${API}${path}` : path;
 }
 
-function hasAuth(auth?: ApiAuth | null): auth is ApiAuth {
-	return Boolean(auth?.user?.trim()) && typeof auth?.pass === 'string' && auth.pass.length > 0;
-}
-
-function buildBasicAuthHeader(auth?: ApiAuth | null): string | null {
-	if (!hasAuth(auth)) return null;
-	return `Basic ${btoa(`${auth.user}:${auth.pass}`)}`;
-}
-
-function withAuthHeaders(auth?: ApiAuth | null, headers?: HeadersInit): Headers {
-	const result = new Headers(headers);
-	const authorization = buildBasicAuthHeader(auth);
-	if (authorization) result.set('Authorization', authorization);
-	return result;
-}
-
 async function readApiError(response: Response): Promise<string> {
 	if (response.status === 401) {
-		return 'API authentication failed. Check the backend username and password.';
+		return 'Your upload session expired. Please select the file again.';
 	}
 
 	let text = '';
@@ -117,6 +80,7 @@ async function readApiError(response: Response): Promise<string> {
 		}
 		if (typeof detail?.detail === 'string') return detail.detail;
 		if (typeof detail?.message === 'string') return detail.message;
+		if (typeof parsed?.message === 'string') return parsed.message;
 	} catch {
 		// fall through to raw text
 	}
@@ -132,9 +96,21 @@ function filenameFromDisposition(disposition: string | null): string | null {
 	return plainMatch?.[1] ?? null;
 }
 
-export function getDefaultApiAuth(): ApiAuth | null {
-	if (!AUTH_ENABLED) return null;
-	return { user: DEFAULT_API_AUTH_USER, pass: DEFAULT_API_AUTH_PASS };
+let sessionRequest: Promise<void> | null = null;
+
+function ensureSession(): Promise<void> {
+	if (!sessionRequest) {
+		sessionRequest = (async () => {
+			const response = await fetch(toApiUrl('/api/session'), {
+				credentials: 'same-origin',
+				cache: 'no-store'
+			});
+			if (!response.ok) throw new Error(await readApiError(response));
+		})().finally(() => {
+			sessionRequest = null;
+		});
+	}
+	return sessionRequest;
 }
 
 // Best-effort decoder for SSE payloads. Returns null on malformed JSON or a
@@ -155,27 +131,29 @@ export function uploadFile(
 	file: File,
 	targetSizeMB: number,
 	audioKbps = 128,
-	onProgress?: (percent: number) => void,
-	auth?: ApiAuth | null
+	onProgress?: (percent: number) => void
 ): { promise: Promise<UploadResponse>; abort: () => void } {
 	const xhr = new XMLHttpRequest();
+	let aborted = false;
+	let rejectUpload: (error: Error) => void;
 
 	const promise = new Promise<UploadResponse>((resolve, reject) => {
+		rejectUpload = reject;
+		void ensureSession().then(() => {
+		if (aborted) return;
 		const fd = new FormData();
 		fd.append('file', file);
+		fd.append('target_size_mb', String(targetSizeMB));
+		fd.append('audio_bitrate_kbps', String(audioKbps));
 
-		// FastAPI's /api/upload reads target_size_mb / audio_bitrate_kbps as
-		// query params (no Form(...) on the backend signature), so the values
-		// have to ride in the URL, not the form body.
+		// Send form fields for 8mb.local142+ and retain query params for137.
 		const params = new URLSearchParams({
 			target_size_mb: String(targetSizeMB),
 			audio_bitrate_kbps: String(audioKbps)
 		});
 
 		xhr.open('POST', toApiUrl(`/api/upload?${params.toString()}`));
-
-		const authorization = buildBasicAuthHeader(auth);
-		if (authorization) xhr.setRequestHeader('Authorization', authorization);
+		xhr.withCredentials = true;
 
 		xhr.upload.onprogress = (e) => {
 			if (e.lengthComputable && onProgress) {
@@ -184,35 +162,43 @@ export function uploadFile(
 			}
 		};
 
-		xhr.onload = () => {
+		xhr.onload = async () => {
 			if (xhr.status >= 200 && xhr.status < 300) {
 				try {
 					resolve(JSON.parse(xhr.responseText || '{}') as UploadResponse);
 				} catch (err) {
 					reject(err);
 				}
-			} else if (xhr.status === 401) {
-				reject(new Error('API authentication failed. Check the backend username and password.'));
 			} else {
-				reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+				const response = new Response(xhr.responseText, { status: xhr.status });
+				reject(new Error(await readApiError(response)));
 			}
 		};
 
 		xhr.onerror = () => reject(new Error('Network error'));
 		xhr.onabort = () => reject(new Error('Upload cancelled'));
 		xhr.send(fd);
+		}).catch(reject);
 	});
 
-	return { promise, abort: () => xhr.abort() };
+	return {
+		promise,
+		abort: () => {
+			if (aborted) return;
+			aborted = true;
+			xhr.abort();
+			rejectUpload(new Error('Upload cancelled'));
+		}
+	};
 }
 
 export async function startCompress(
-	payload: CompressRequest,
-	auth?: ApiAuth | null
+	payload: CompressRequest
 ): Promise<CompressResponse> {
 	const res = await fetch(toApiUrl('/api/compress'), {
 		method: 'POST',
-		headers: withAuthHeaders(auth, { 'Content-Type': 'application/json' }),
+		credentials: 'same-origin',
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(payload)
 	});
 
@@ -222,11 +208,10 @@ export async function startCompress(
 }
 
 export async function getJobStatus(
-	taskId: string,
-	auth?: ApiAuth | null
+	taskId: string
 ): Promise<JobStatusResponse> {
 	const res = await fetch(toApiUrl(`/api/jobs/${encodeURIComponent(taskId)}/status`), {
-		headers: withAuthHeaders(auth)
+		credentials: 'same-origin'
 	});
 
 	if (!res.ok) throw new Error(await readApiError(res));
@@ -238,10 +223,10 @@ export function openProgressStream(taskId: string): EventSource {
 	return new EventSource(toApiUrl(`/api/stream/${encodeURIComponent(taskId)}`));
 }
 
-export async function cancelJob(taskId: string, auth?: ApiAuth | null): Promise<void> {
+export async function cancelJob(taskId: string): Promise<void> {
 	const res = await fetch(toApiUrl(`/api/jobs/${encodeURIComponent(taskId)}/cancel`), {
 		method: 'POST',
-		headers: withAuthHeaders(auth)
+		credentials: 'same-origin'
 	});
 
 	if (!res.ok) throw new Error(await readApiError(res));
@@ -250,7 +235,6 @@ export async function cancelJob(taskId: string, auth?: ApiAuth | null): Promise<
 export async function downloadCompletedFile(
 	taskId: string,
 	suggestedFilename: string,
-	auth?: ApiAuth | null,
 	waitSeconds = 5
 ): Promise<void> {
 	const downloadUrl = new URL(
@@ -259,7 +243,7 @@ export async function downloadCompletedFile(
 	);
 	downloadUrl.searchParams.set('wait', String(waitSeconds));
 
-	const res = await fetch(downloadUrl.toString(), { headers: withAuthHeaders(auth) });
+	const res = await fetch(downloadUrl.toString(), { credentials: 'same-origin' });
 	if (!res.ok) throw new Error(await readApiError(res));
 
 	const blob = await res.blob();
